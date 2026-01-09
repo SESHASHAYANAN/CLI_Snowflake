@@ -1,0 +1,8 @@
+
+# To update .env automatically, run:
+# 
+# In PowerShell:
+(Get-Content .env) -replace 'FABRIC_DATASET_ID=.*', 'FABRIC_DATASET_ID=88105e52-069c-423e-b84b-769b6cd60899' | Set-Content .env
+#
+# Or manually edit .env and change line:
+# FABRIC_DATASET_ID=88105e52-069c-423e-b84b-769b6cd60899

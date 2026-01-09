@@ -1,0 +1,87 @@
+# ============================================================================
+# Semantic-Sync Configuration
+# ============================================================================
+# This file contains the default configuration for semantic-sync.
+# Environment variables take precedence over values defined here.
+#
+# Required Environment Variables:
+#   - SNOWFLAKE_ACCOUNT
+#   - SNOWFLAKE_USER
+#   - SNOWFLAKE_PASSWORD
+#   - SNOWFLAKE_WAREHOUSE
+#   - SNOWFLAKE_DATABASE
+#   - SNOWFLAKE_SEMANTIC_VIEW
+#   - FABRIC_TENANT_ID
+#   - FABRIC_CLIENT_ID
+#   - FABRIC_CLIENT_SECRET
+#   - FABRIC_WORKSPACE_ID
+#   - FABRIC_DATASET_ID
+# ============================================================================
+
+# Snowflake Configuration
+# -----------------------
+# Connection details for Snowflake Semantic Views
+snowflake:
+  # Account identifier (e.g., "xy12345.us-east-1")
+  account: "${SNOWFLAKE_ACCOUNT}"
+
+  # Authentication
+  user: "${SNOWFLAKE_USER}"
+  password: "${SNOWFLAKE_PASSWORD}"
+
+  # Warehouse for compute
+  warehouse: "${SNOWFLAKE_WAREHOUSE}"
+
+  # Database and schema containing semantic views
+  database: "${SNOWFLAKE_DATABASE}"
+  schema: "PUBLIC"
+
+  # Optional: Snowflake role to use
+  role: null
+
+  # Name of the semantic view to sync
+  semantic_view_name: "${SNOWFLAKE_SEMANTIC_VIEW}"
+
+
+# Microsoft Fabric Configuration
+# ------------------------------
+# OAuth 2.0 Client Credentials for Fabric API access
+fabric:
+  # Azure AD / Entra ID tenant
+  tenant_id: "${FABRIC_TENANT_ID}"
+
+  # Application (client) registration
+  client_id: "${FABRIC_CLIENT_ID}"
+  client_secret: "${FABRIC_CLIENT_SECRET}"
+
+  # Fabric workspace and dataset identifiers
+  workspace_id: "${FABRIC_WORKSPACE_ID}"
+  dataset_id: "${FABRIC_DATASET_ID}"
+
+  # Power BI REST API base (do not change unless using sovereign cloud)
+  api_base_url: "https://api.powerbi.com/v1.0/myorg"
+
+
+# Sync Configuration
+# ------------------
+# Controls sync behavior and performance
+sync:
+  # Number of items to process per batch
+  batch_size: 100
+
+  # Maximum time (seconds) for sync operations
+  timeout_seconds: 300
+
+  # Retry configuration for transient failures
+  max_retries: 3
+  retry_delay_seconds: 5
+
+  # Metadata storage
+  store_metadata: true
+  metadata_path: ".semantic-sync/metadata"
+
+
+# Logging Configuration
+# ---------------------
+log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+log_json: false    # Set to true for JSON log output (production)
