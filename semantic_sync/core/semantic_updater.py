@@ -413,8 +413,10 @@ class SemanticUpdater:
         """
         Apply changes to Fabric semantic model.
 
-        Note: Fabric API has limited support for incremental updates.
-        This implementation handles what's possible via the REST API.
+        Handles Push API limitations:
+        - PUT works for updating existing tables (adding columns)
+        - POST does NOT work for creating new tables after dataset creation
+        - If new tables are needed, creates a new dataset with all required tables
         """
         if dry_run:
             logger.info(f"DRY RUN: Would apply {len(changes)} changes to Fabric")
@@ -433,7 +435,6 @@ class SemanticUpdater:
                 ],
             }
 
-        # Organize changes by table for batch processing
         results = {
             "applied": 0,
             "skipped": 0,
@@ -444,19 +445,30 @@ class SemanticUpdater:
         fabric_client = self._get_fabric_client()
         dataset_id = self._fabric_config.dataset_id
         
-        # Group table and column changes
+        # Get existing tables in the target dataset
+        existing_table_names = fabric_client.get_existing_table_names(dataset_id)
+        logger.info(f"Existing tables in target dataset: {existing_table_names}")
+        
+        # Group changes by type
         tables_to_add = {}
+        tables_to_update = {}
         columns_to_add_by_table = {}
+        new_tables_needed = []
         
         for change in changes:
             try:
                 if change.entity_type == "table":
                     if change.change_type == ChangeType.ADDED:
-                        # Collect table to be added
-                        tables_to_add[change.entity_name] = change
+                        table_name = change.entity_name
+                        if table_name in existing_table_names:
+                            # Table exists - can update it
+                            tables_to_update[table_name] = change
+                        else:
+                            # New table needed
+                            tables_to_add[table_name] = change
+                            new_tables_needed.append(table_name)
                     elif change.change_type == ChangeType.MODIFIED:
-                        # Table metadata updates
-                        logger.debug(f"Applying table metadata change: {change.entity_name}")
+                        logger.debug(f"Table metadata change: {change.entity_name}")
                         results["applied"] += 1
                         results["details"].append({
                             "type": change.change_type.value,
@@ -467,17 +479,9 @@ class SemanticUpdater:
                     else:
                         logger.warning(f"Change type {change.change_type.value} for table not supported")
                         results["skipped"] += 1
-                        results["details"].append({
-                            "type": change.change_type.value,
-                            "entity": change.entity_type,
-                            "name": change.entity_name,
-                            "status": "skipped",
-                            "reason": "Not supported via REST API",
-                        })
                 
                 elif change.entity_type == "column":
                     if change.change_type == ChangeType.ADDED:
-                        # Identify parent table
                         table_name = change.parent_entity
                         if not table_name and "." in change.entity_name:
                             table_name = change.entity_name.rsplit(".", 1)[0]
@@ -489,59 +493,54 @@ class SemanticUpdater:
                         else:
                             logger.warning(f"Column change missing table context: {change.entity_name}")
                             results["skipped"] += 1
-                            results["details"].append({
-                                "type": "added",
-                                "entity": "column",
-                                "name": change.entity_name,
-                                "status": "skipped",
-                                "reason": "Missing table context",
-                            })
-
                     elif change.change_type == ChangeType.MODIFIED:
-                        # Column metadata updates
-                        logger.debug(f"Applying column metadata change: {change.entity_name}")
                         results["applied"] += 1
-                        results["details"].append({
-                            "type": change.change_type.value,
-                            "entity": change.entity_type,
-                            "name": change.entity_name,
-                            "status": "applied",
-                        })
                     else:
-                        logger.warning(f"Change type {change.change_type.value} for column not supported")
                         results["skipped"] += 1
                 
                 else:
-                    # Other entity types (measures, relationships)
-                    logger.warning(f"Entity type {change.entity_type} not supported for addition")
+                    logger.warning(f"Entity type {change.entity_type} not supported")
                     results["skipped"] += 1
-                    results["details"].append({
-                        "type": change.change_type.value,
-                        "entity": change.entity_type,
-                        "name": change.entity_name,
-                        "status": "skipped",
-                        "reason": "Entity type not supported",
-                    })
 
             except Exception as e:
                 logger.error(f"Failed to process change: {e}")
                 results["errors"] += 1
-                results["details"].append({
-                    "type": change.change_type.value,
-                    "entity": change.entity_type,
-                    "name": change.entity_name,
-                    "status": "error",
-                    "error": str(e),
-                })
         
-        # 1. Add NEW tables
-        for table_name, table_change in tables_to_add.items():
-            try:
-                # Get columns for this table
+        # Check if we need to create new tables
+        if new_tables_needed:
+            logger.warning(
+                f"Push API limitation: Cannot add new tables to existing dataset. "
+                f"New tables needed: {new_tables_needed}"
+            )
+            
+            # Strategy: Create a new dataset with all required tables
+            # Build table definitions for the new dataset
+            all_tables_def = []
+            
+            # Include existing tables (with their current columns)
+            for table_name in existing_table_names:
+                try:
+                    # Get current table definition
+                    current_tables = fabric_client.get_dataset_tables(dataset_id)
+                    for t in current_tables:
+                        if t.get("name") == table_name:
+                            # Use existing columns or add placeholder
+                            cols = t.get("columns", [{"name": "ID", "dataType": "Int64"}])
+                            if not cols:
+                                cols = [{"name": "ID", "dataType": "Int64"}]
+                            all_tables_def.append({
+                                "name": table_name,
+                                "columns": cols,
+                            })
+                            break
+                except Exception as e:
+                    logger.error(f"Failed to get existing table definition: {e}")
+            
+            # Add new tables with their columns
+            for table_name in new_tables_needed:
                 table_columns = columns_to_add_by_table.get(table_name, [])
-                
-                # Build table definition
                 columns_def = []
+                
                 for col_change in table_columns:
                     col_name = col_change.entity_name
                     if "." in col_name:
@@ -557,102 +556,120 @@ class SemanticUpdater:
                     })
                 
                 if not columns_def:
-                    # Table has no columns yet, add a placeholder
-                    columns_def = [{
-                        "name": "ID",
-                        "dataType": "Int64",
-                    }]
+                    columns_def = [{"name": "ID", "dataType": "Int64"}]
                 
-                table_def = {
+                all_tables_def.append({
                     "name": table_name,
-                    "columns": columns_def
-                }
-                
-                # Add table via Push API
-                logger.info(f"Adding table '{table_name}' with {len(columns_def)} columns")
-                fabric_client.add_table(dataset_id, table_def)
-                
-                results["applied"] += 1  # For table
-                results["applied"] += len(table_columns)  # For columns
-                
-                results["details"].append({
-                    "type": "added",
-                    "entity": "table",
-                    "name": table_name,
-                    "status": "applied",
+                    "columns": columns_def,
                 })
+            
+            # Create new dataset
+            try:
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                new_dataset_name = f"SnowflakeSync_{timestamp}"
                 
-                for col_change in table_columns:
+                logger.info(f"Creating new Push dataset '{new_dataset_name}' with {len(all_tables_def)} tables")
+                new_dataset = fabric_client.create_push_dataset(
+                    name=new_dataset_name,
+                    tables=all_tables_def,
+                )
+                
+                new_dataset_id = new_dataset.get("id")
+                logger.info(f"[OK] Created new dataset: {new_dataset_name} (ID: {new_dataset_id})")
+                print(f"\n[OK] Created new Push dataset: {new_dataset_name}")
+                print(f"     New Dataset ID: {new_dataset_id}")
+                print(f"     Tables created: {len(all_tables_def)}")
+                print(f"\n     To use this dataset, update FABRIC_DATASET_ID in your .env file:")
+                print(f"     FABRIC_DATASET_ID={new_dataset_id}\n")
+                
+                # Count successes
+                results["applied"] += len(tables_to_add)
+                for table_name in new_tables_needed:
                     results["details"].append({
                         "type": "added",
-                        "entity": "column",
-                        "name": col_change.entity_name,
+                        "entity": "table",
+                        "name": table_name,
                         "status": "applied",
+                        "note": f"Created in new dataset: {new_dataset_name}",
                     })
+                    # Count columns for this table
+                    for col_change in columns_to_add_by_table.get(table_name, []):
+                        results["applied"] += 1
+                        results["details"].append({
+                            "type": "added",
+                            "entity": "column",
+                            "name": col_change.entity_name,
+                            "status": "applied",
+                        })
                 
-                # Remove from processing list so we don't try to update it later
-                if table_name in columns_to_add_by_table:
-                    del columns_to_add_by_table[table_name]
+                # Remove processed tables from columns list
+                for table_name in new_tables_needed:
+                    if table_name in columns_to_add_by_table:
+                        del columns_to_add_by_table[table_name]
                 
             except Exception as e:
-                logger.error(f"Failed to add table '{table_name}': {e}")
-                print(f"ADD TABLE ERROR ({table_name}): {e}")
-                results["errors"] += 1
-                results["details"].append({
-                    "type": "added",
-                    "entity": "table",
-                    "name": table_name,
-                    "status": "error",
-                    "error": str(e),
-                })
-
-        # 2. Add columns to EXISTING tables
+                logger.error(f"Failed to create new dataset: {e}")
+                print(f"\n[ERROR] Failed to create new dataset: {e}")
+                results["errors"] += len(new_tables_needed)
+                for table_name in new_tables_needed:
+                    results["details"].append({
+                        "type": "added",
+                        "entity": "table",
+                        "name": table_name,
+                        "status": "error",
+                        "error": str(e),
+                    })
+        
+        # Update existing tables with new columns
         if columns_to_add_by_table:
             try:
-                # Fetch current schema to append columns
                 current_tables = fabric_client.get_dataset_tables(dataset_id)
                 current_tables_map = {t["name"]: t for t in current_tables}
                 
                 for table_name, col_changes in columns_to_add_by_table.items():
                     if table_name not in current_tables_map:
-                        logger.error(f"Cannot add columns to unknown table: {table_name}")
-                        results["errors"] += len(col_changes)
+                        # Table doesn't exist and wasn't created above - skip
+                        logger.warning(f"Skipping columns for non-existent table: {table_name}")
+                        for col_change in col_changes:
+                            results["skipped"] += 1
+                            results["details"].append({
+                                "type": "added",
+                                "entity": "column",
+                                "name": col_change.entity_name,
+                                "status": "skipped",
+                                "reason": f"Table {table_name} does not exist",
+                            })
                         continue
                     
                     current_table_def = current_tables_map[table_name]
                     current_columns = current_table_def.get("columns", [])
                     
-                    # Prepare new columns
                     new_columns_def = []
                     for col_change in col_changes:
                         col_name = col_change.entity_name
                         if "." in col_name:
                             col_name = col_name.split(".")[-1]
                         
-                        # Skip if already exists
                         if any(c.get("name") == col_name for c in current_columns):
                             continue
                         
                         data_type = "String"
                         if col_change.new_value:
                             data_type = col_change.new_value.get("data_type", "String")
-                            
+                        
                         new_columns_def.append({
                             "name": col_name,
-                            "dataType": self._map_snowflake_type_to_fabric(data_type)
+                            "dataType": self._map_snowflake_type_to_fabric(data_type),
                         })
                     
                     if not new_columns_def:
                         continue
-                        
-                    # Merge columns
-                    updated_columns = current_columns + new_columns_def
                     
-                    # Update table definition
+                    updated_columns = current_columns + new_columns_def
                     table_def = {
                         "name": table_name,
                         "columns": updated_columns,
-                        "description": current_table_def.get("description", "")
                     }
                     
                     logger.info(f"Adding {len(new_columns_def)} columns to existing table '{table_name}'")

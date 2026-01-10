@@ -341,14 +341,110 @@ class FabricClient:
             Response from API
 
         Note:
-            Only works with Push API datasets (addRowsAPIEnabled=true).
-            For Import datasets, use XMLA/TOM API instead.
+            Power BI Push API does NOT support POST for creating new tables
+            after dataset creation. This method will:
+            1. Try PUT to update existing table (works if table exists)
+            2. If table doesn't exist (404), raise an error with guidance
         """
-        endpoint = f"/groups/{self._config.workspace_id}/datasets/{dataset_id}/tables"
-        logger.info(f"Adding table '{table_definition.get('name')}' to dataset {dataset_id}")
-        # Use POST to create new table (PUT is for updates)
-        return self.post(endpoint, data=table_definition)
+        table_name = table_definition.get('name')
+        logger.info(f"Adding/updating table '{table_name}' to dataset {dataset_id}")
+        
+        # Try PUT first - works for existing tables
+        try:
+            return self.update_table(dataset_id, table_name, table_definition)
+        except ResourceNotFoundError:
+            # Table doesn't exist - Push API limitation
+            raise ResourceNotFoundError(
+                f"Cannot create new table '{table_name}' in existing Push dataset. "
+                "Power BI Push API does not support adding new tables after dataset creation. "
+                "Solution: Use create_push_dataset() to recreate the dataset with all required tables.",
+                resource_type="push_api_table",
+                details={
+                    "table_name": table_name,
+                    "dataset_id": dataset_id,
+                    "limitation": "Push API does not support POST /tables for new tables",
+                },
+            )
     
+    def table_exists(self, dataset_id: str, table_name: str) -> bool:
+        """
+        Check if a table exists in a dataset.
+        
+        Args:
+            dataset_id: Dataset ID
+            table_name: Name of the table to check
+            
+        Returns:
+            True if table exists, False otherwise
+        """
+        try:
+            tables = self.get_dataset_tables(dataset_id)
+            return any(t.get("name") == table_name for t in tables)
+        except Exception:
+            return False
+    
+    def get_existing_table_names(self, dataset_id: str) -> set[str]:
+        """
+        Get the set of existing table names in a dataset.
+        
+        Args:
+            dataset_id: Dataset ID
+            
+        Returns:
+            Set of table names
+        """
+        try:
+            tables = self.get_dataset_tables(dataset_id)
+            return {t.get("name") for t in tables if t.get("name")}
+        except Exception:
+            return set()
+    
+    def create_push_dataset(
+        self,
+        name: str,
+        tables: list[dict[str, Any]],
+        default_mode: str = "Push",
+    ) -> dict[str, Any]:
+        """
+        Create a new Push API dataset with the specified tables.
+        
+        Args:
+            name: Name of the new dataset
+            tables: List of table definitions with columns
+            default_mode: Dataset mode ("Push" or "Streaming")
+            
+        Returns:
+            Created dataset info including new dataset ID
+            
+        Note:
+            This creates a brand new dataset. Use this to add new tables
+            since Push API doesn't support adding tables after creation.
+        """
+        endpoint = f"/groups/{self._config.workspace_id}/datasets"
+        
+        dataset_definition = {
+            "name": name,
+            "defaultMode": default_mode,
+            "tables": tables,
+        }
+        
+        logger.info(f"Creating Push dataset '{name}' with {len(tables)} tables")
+        return self.post(endpoint, data=dataset_definition)
+    
+    def delete_dataset(self, dataset_id: str) -> dict[str, Any]:
+        """
+        Delete a dataset.
+        
+        Args:
+            dataset_id: Dataset ID to delete
+            
+        Returns:
+            Empty response on success
+        """
+        endpoint = f"/groups/{self._config.workspace_id}/datasets/{dataset_id}"
+        logger.warning(f"Deleting dataset {dataset_id}")
+        return self.delete(endpoint)
+
     def put(
         self,
         endpoint: str,
