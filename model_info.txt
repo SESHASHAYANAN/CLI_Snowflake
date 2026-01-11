@@ -1,0 +1,7 @@
+[1mSemantic Model: SnowflakeSync[0m
+Source: fabric
+Extracted: 2026-01-11T12:41:43.653335
+
+[1mTables (1)[0m
+------------------------------------------------------------
+  [96mSALES_DATA[0m

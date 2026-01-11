@@ -14,6 +14,7 @@ from semantic_sync.core.models import SemanticModel
 from semantic_sync.core.change_detector import ChangeDetector, ChangeReport, Change, ChangeType
 from semantic_sync.core.snowflake_reader import SnowflakeReader
 from semantic_sync.core.snowflake_writer import SnowflakeWriter
+from semantic_sync.core.snowflake_semantic_writer import SnowflakeSemanticWriter
 from semantic_sync.core.fabric_client import FabricClient
 from semantic_sync.core.fabric_model_parser import FabricModelParser
 from semantic_sync.config.settings import FabricConfig, SnowflakeConfig
@@ -119,6 +120,7 @@ class SemanticUpdater:
         self._fabric_parser: FabricModelParser | None = None
         self._snowflake_reader: SnowflakeReader | None = None
         self._snowflake_writer: SnowflakeWriter | None = None
+        self._snowflake_semantic_writer: SnowflakeSemanticWriter | None = None
 
     def _get_fabric_client(self) -> FabricClient:
         """Get or create Fabric client."""
@@ -159,6 +161,17 @@ class SemanticUpdater:
                 )
             self._snowflake_writer = SnowflakeWriter(self._snowflake_config)
         return self._snowflake_writer
+
+    def _get_snowflake_semantic_writer(self) -> SnowflakeSemanticWriter:
+        """Get or create Snowflake semantic metadata writer (REST API approach)."""
+        if self._snowflake_semantic_writer is None:
+            if self._snowflake_config is None:
+                raise ValidationError(
+                    "Snowflake configuration is required",
+                    details={"missing": "snowflake_config"},
+                )
+            self._snowflake_semantic_writer = SnowflakeSemanticWriter(self._snowflake_config)
+        return self._snowflake_semantic_writer
 
     def sync(
         self,
@@ -226,39 +239,120 @@ class SemanticUpdater:
         validate_only: bool,
         started_at: datetime,
     ) -> SyncResult:
-        """Sync from Fabric to Snowflake."""
+        """
+        Sync from Fabric to Snowflake (metadata-only, REST API approach).
+        
+        This method reads the semantic model from Fabric using REST API
+        and writes the metadata to Snowflake using SQL (no XMLA required).
+        """
         # Read source model from Fabric
-        logger.info("Reading source model from Fabric")
+        logger.info("Reading source model from Fabric via REST API")
         fabric_parser = self._get_fabric_parser()
         source_model = fabric_parser.read_semantic_model()
-
-        # Read target model from Snowflake
-        logger.info("Reading target model from Snowflake")
-        snowflake_reader = self._get_snowflake_reader()
-        target_model = snowflake_reader.read_semantic_view()
-
-        # Detect changes
-        logger.info("Detecting changes")
-        change_report = self._change_detector.detect_changes(source_model, target_model)
+        
+        logger.info(f"Fabric model loaded: {source_model.name}")
+        logger.info(f"  Tables: {len(source_model.tables)}")
+        logger.info(f"  Measures: {len(source_model.measures)}")
+        logger.info(f"  Relationships: {len(source_model.relationships)}")
 
         if validate_only:
-            logger.info("Validation only mode - not applying changes")
+            # For validation, we still detect changes against current Snowflake state
+            try:
+                snowflake_reader = self._get_snowflake_reader()
+                target_model = snowflake_reader.read_semantic_view()
+                change_report = self._change_detector.detect_changes(source_model, target_model)
+                
+                return SyncResult(
+                    success=True,
+                    direction=SyncDirection.FABRIC_TO_SNOWFLAKE,
+                    mode=mode,
+                    changes_applied=0,
+                    changes_skipped=change_report.summary()["total"],
+                    errors=0,
+                    started_at=started_at,
+                    completed_at=datetime.utcnow(),
+                    source_model=source_model.name,
+                    target_model=target_model.name,
+                    dry_run=True,
+                    details=[c.to_dict() for c in change_report.changes],
+                )
+            except Exception as e:
+                logger.warning(f"Could not read Snowflake for validation: {e}")
+                # Continue without target comparison
+                return SyncResult(
+                    success=True,
+                    direction=SyncDirection.FABRIC_TO_SNOWFLAKE,
+                    mode=mode,
+                    changes_applied=0,
+                    changes_skipped=0,
+                    errors=0,
+                    started_at=started_at,
+                    completed_at=datetime.utcnow(),
+                    source_model=source_model.name,
+                    target_model="unknown",
+                    dry_run=True,
+                    details=[{"status": "validation_only", "model": source_model.name}],
+                )
+
+        # For metadata-only or full sync, use the SnowflakeSemanticWriter
+        # This writes the complete model metadata to Snowflake metadata tables
+        if mode in (SyncMode.METADATA_ONLY, SyncMode.FULL):
+            logger.info(f"Using SnowflakeSemanticWriter for {mode.value} sync")
+            semantic_writer = self._get_snowflake_semantic_writer()
+            
+            # Perform full model sync to Snowflake metadata tables
+            sync_result = semantic_writer.sync_semantic_model(
+                model=source_model,
+                dry_run=dry_run,
+            )
+            
             return SyncResult(
-                success=True,
+                success=sync_result.get("errors", 0) == 0,
                 direction=SyncDirection.FABRIC_TO_SNOWFLAKE,
                 mode=mode,
-                changes_applied=0,
-                changes_skipped=change_report.summary()["total"],
-                errors=0,
+                changes_applied=sync_result.get("applied", 0),
+                changes_skipped=sync_result.get("skipped", 0),
+                errors=sync_result.get("errors", 0),
                 started_at=started_at,
                 completed_at=datetime.utcnow(),
                 source_model=source_model.name,
-                target_model=target_model.name,
-                dry_run=True,
-                details=[c.to_dict() for c in change_report.changes],
+                target_model=f"{self._snowflake_config.database}.{self._snowflake_config.schema_name}",
+                dry_run=dry_run,
+                details=sync_result.get("details", []),
+            )
+        
+        # For incremental mode, detect and apply only changes
+        logger.info("Incremental mode: detecting changes")
+        try:
+            snowflake_reader = self._get_snowflake_reader()
+            target_model = snowflake_reader.read_semantic_view()
+        except Exception as e:
+            logger.warning(f"Could not read existing Snowflake model: {e}")
+            # If we can't read target, treat as full sync
+            logger.info("Falling back to full metadata sync")
+            semantic_writer = self._get_snowflake_semantic_writer()
+            sync_result = semantic_writer.sync_semantic_model(
+                model=source_model,
+                dry_run=dry_run,
+            )
+            
+            return SyncResult(
+                success=sync_result.get("errors", 0) == 0,
+                direction=SyncDirection.FABRIC_TO_SNOWFLAKE,
+                mode=SyncMode.FULL,
+                changes_applied=sync_result.get("applied", 0),
+                changes_skipped=sync_result.get("skipped", 0),
+                errors=sync_result.get("errors", 0),
+                started_at=started_at,
+                completed_at=datetime.utcnow(),
+                source_model=source_model.name,
+                target_model=f"{self._snowflake_config.database}.{self._snowflake_config.schema_name}",
+                dry_run=dry_run,
+                details=sync_result.get("details", []),
             )
 
-        # Filter changes based on mode
+        # Detect changes
+        change_report = self._change_detector.detect_changes(source_model, target_model)
         changes_to_apply = self._filter_changes_by_mode(change_report.changes, mode)
 
         if not changes_to_apply:
@@ -277,10 +371,10 @@ class SemanticUpdater:
                 dry_run=dry_run,
             )
 
-        # Apply changes
-        logger.info(f"Applying {len(changes_to_apply)} changes to Snowflake")
-        snowflake_writer = self._get_snowflake_writer()
-        apply_result = snowflake_writer.apply_changes(changes_to_apply, dry_run=dry_run)
+        # Apply incremental changes using the semantic writer
+        logger.info(f"Applying {len(changes_to_apply)} incremental changes to Snowflake")
+        semantic_writer = self._get_snowflake_semantic_writer()
+        apply_result = semantic_writer.apply_changes(changes_to_apply, dry_run=dry_run)
 
         return SyncResult(
             success=apply_result["errors"] == 0,

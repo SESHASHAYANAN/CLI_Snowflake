@@ -31,9 +31,9 @@ class FabricModelParser:
         self._config = config
         self._xmla_client = None
 
-    def read_semantic_model(self) -> SemanticModel:
-        """Read and parse the configured semantic model from Fabric."""
-        dataset_id = self._config.dataset_id
+    def read_semantic_model(self, dataset_id: str | None = None) -> SemanticModel:
+        """Read and parse a semantic model from Fabric."""
+        dataset_id = dataset_id or self._config.dataset_id
         logger.info(f"Reading Fabric semantic model: {dataset_id}")
 
         try:
@@ -45,51 +45,65 @@ class FabricModelParser:
                 resource_id=dataset_id,
             )
 
-        # Check if this is a Push API dataset or Import dataset
-        is_push_dataset = dataset_info.get("addRowsAPIEnabled", False)
         dataset_name = dataset_info.get("name", dataset_id)
+        dataset_type = "push" if dataset_info.get("addRowsAPIEnabled", False) else "import"
+        description = dataset_info.get("description", "")
         
-        if is_push_dataset:
-            logger.info(f"Dataset '{dataset_name}' is a Push API dataset - using REST API")
+        logger.info(f"Dataset '{dataset_name}' ({dataset_type}) - using REST API")
+        
+        # 1. Get Tables (via standard REST API)
+        tables = []
+        try:
             tables_data = self._client.get_dataset_tables(dataset_id)
+            tables = self._parse_tables(tables_data)
+        except Exception as e:
+            logger.warning(f"Failed to read tables via standard REST API: {e}")
+
+        # 2. Get Measures, Relationships, and Table fallback (via DMV)
+        measures = []
+        relationships = []
+        
+        try:
+            # Initialize XMLA/DMV client (uses REST executeQueries)
+            xmla_client = FabricXmlaClient(config=self._config)
+            # Ensure we target the correct dataset
+            xmla_client._dataset_id = dataset_id 
+            xmla_client.connect(dataset_name, dataset_name)
             
-            # Check if we got columns - if not, we might need to fallback to XMLA
-            has_columns = any(t.get("columns") for t in tables_data) if tables_data else False
+            # Fetch Measures
+            measures_data = xmla_client.get_measures()
+            measures = self._parse_measures(measures_data)
             
-            tables = []
-            measures = []
-            relationships = []
+            # Fetch Relationships
+            relationships_data = xmla_client.get_relationships()
+            relationships = self._parse_relationships(relationships_data)
             
-            if tables_data and not has_columns:
-                logger.warning("REST API returned tables without columns - attempting XMLA/DMV")
-                xmla_tables, xmla_measures, xmla_rels = self._read_via_xmla(dataset_name)
-                
-                if not xmla_tables and tables_data:
-                    logger.warning("XMLA/DMV returned no tables (likely failed) - falling back to REST tables (metadata only)")
-                    # Fallback to REST tables (even if columns are missing)
-                    # This allows 'Add Column' logic to proceed for existing tables
-                    tables = self._parse_tables(tables_data)
-                else:
-                    tables = xmla_tables
-                    measures = xmla_measures
-                    relationships = xmla_rels
-            else:
-                tables = self._parse_tables(tables_data)
-        else:
-            logger.info(f"Dataset '{dataset_name}' is an Import dataset - using XMLA endpoint")
-            tables, measures, relationships = self._read_via_xmla(dataset_name)
+            # Fallback/Enrichment for tables
+            # If REST returned no tables OR tables with no columns (common in Import mode)
+            tables_with_columns = sum(1 for t in tables if t.columns)
+            if not tables or tables_with_columns == 0:
+                logger.info("Attempting to fetch table metadata via DMV...")
+                tables_dmv = xmla_client.get_tables()
+                if tables_dmv:
+                    tables = self._parse_tables(tables_dmv)
+                    
+        except Exception as e:
+            logger.warning(f"Metadata enrichment via DMV failed: {e}")
+
+        if not tables and not measures:
+             logger.warning("No tables or measures found. Model might be empty.")
 
         model = SemanticModel(
             name=dataset_name,
             source="fabric",
-            description=dataset_info.get("description", ""),
+            description=description,
             tables=tables,
             measures=measures,
             relationships=relationships,
             metadata={
                 "dataset_id": dataset_id,
                 "workspace_id": self._config.workspace_id,
-                "dataset_type": "push" if is_push_dataset else "import",
+                "dataset_type": dataset_type,
             },
         )
 
@@ -203,7 +217,7 @@ class FabricModelParser:
                     name=measure_name,
                     expression=measure_data.get("expression", ""),
                     description=measure_data.get("description", ""),
-                    table=measure_data.get("table", ""),
+                    table_name=measure_data.get("table", ""),
                     is_hidden=measure_data.get("isHidden", False),
                 )
             )
