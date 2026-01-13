@@ -5,6 +5,9 @@ Compares semantic models to detect additions, modifications, and deletions
 between source and target systems.
 """
 
+from __future__ import annotations
+
+
 from enum import Enum
 from typing import Any
 from dataclasses import dataclass, field

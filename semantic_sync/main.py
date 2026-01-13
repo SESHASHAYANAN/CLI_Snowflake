@@ -4,6 +4,9 @@ Semantic Sync CLI - Command-line interface for semantic model synchronization.
 Provides commands for syncing semantic models between Snowflake and Fabric.
 """
 
+from __future__ import annotations
+
+
 import sys
 from pathlib import Path
 from typing import Optional
@@ -704,6 +707,266 @@ def snowflake_to_fabric(
         logger.error(f"Sync failed: {e}")
         click.echo(f"\n[ERROR] {e}", err=True)
         sys.exit(1)
+
+
+# ============================================================================
+# Snapshot/Rollback Commands
+# ============================================================================
+
+@cli.group()
+def snapshot() -> None:
+    """
+    Manage semantic model snapshots for rollback capability.
+    
+    Snapshots allow you to save the current state of a semantic model
+    before sync operations, enabling rollback if needed.
+    
+    Examples:
+    
+        # Create a snapshot before sync
+        semantic-sync snapshot create
+        
+        # List all snapshots
+        semantic-sync snapshot list
+        
+        # Restore from the latest snapshot
+        semantic-sync snapshot restore --latest
+        
+        # Restore from a specific snapshot
+        semantic-sync snapshot restore --id <snapshot-id>
+    """
+    pass
+
+
+@snapshot.command("create")
+@click.option(
+    "--source",
+    "-s",
+    type=click.Choice(["fabric", "snowflake"]),
+    default="fabric",
+    help="Source to snapshot (default: fabric)",
+)
+@click.option(
+    "--description",
+    "-d",
+    type=str,
+    help="Description for this snapshot",
+)
+@click.pass_context
+def snapshot_create(ctx: click.Context, source: str, description: str | None) -> None:
+    """
+    Create a snapshot of the current semantic model.
+    
+    Saves the current state to SQLite for later restoration.
+    """
+    from semantic_sync.core.sqlite_rollback import get_rollback_manager
+    
+    logger = get_logger(__name__)
+    
+    try:
+        settings = get_settings()
+        manager = get_rollback_manager()
+        
+        click.echo(f"Creating snapshot from {source}...")
+        
+        if source == "fabric":
+            fabric_config = settings.get_fabric_config()
+            from semantic_sync.core import FabricClient, FabricModelParser
+            client = FabricClient(fabric_config)
+            parser = FabricModelParser(client, fabric_config)
+            model = parser.read_semantic_model()
+        else:
+            snowflake_config = settings.get_snowflake_config()
+            from semantic_sync.core import SnowflakeReader
+            reader = SnowflakeReader(snowflake_config)
+            model = reader.read_semantic_view()
+        
+        # Create snapshot
+        snapshot_id = manager.create_snapshot(model, description=description)
+        
+        click.echo()
+        click.echo("=" * 50)
+        click.echo("[OK] Snapshot created successfully!")
+        click.echo("=" * 50)
+        click.echo(f"  Snapshot ID:  {snapshot_id}")
+        click.echo(f"  Model:        {model.name}")
+        click.echo(f"  Source:       {source}")
+        click.echo(f"  Tables:       {len(model.tables)}")
+        click.echo(f"  Measures:     {len(model.measures)}")
+        if description:
+            click.echo(f"  Description:  {description}")
+        click.echo("=" * 50)
+        
+    except Exception as e:
+        logger.error(f"Snapshot creation failed: {e}")
+        click.echo(f"\n[ERROR] {e}", err=True)
+        sys.exit(1)
+
+
+@snapshot.command("list")
+@click.option(
+    "--limit",
+    "-n",
+    type=int,
+    default=10,
+    help="Maximum number of snapshots to show",
+)
+@click.option(
+    "--model",
+    "-m",
+    type=str,
+    help="Filter by model name",
+)
+def snapshot_list(limit: int, model: str | None) -> None:
+    """
+    List available snapshots.
+    
+    Shows recent snapshots that can be restored.
+    """
+    from semantic_sync.core.sqlite_rollback import get_rollback_manager
+    
+    manager = get_rollback_manager()
+    snapshots = manager.list_snapshots(limit=limit, model_name=model)
+    
+    if not snapshots:
+        click.echo("No snapshots found.")
+        return
+    
+    click.echo()
+    click.echo("=" * 80)
+    click.echo(" AVAILABLE SNAPSHOTS")
+    click.echo("=" * 80)
+    click.echo(f"{'ID':<38} {'Model':<20} {'Tables':<8} {'Created':<20}")
+    click.echo("-" * 80)
+    
+    for snap in snapshots:
+        created = snap.created_at.strftime("%Y-%m-%d %H:%M")
+        click.echo(f"{snap.snapshot_id[:36]:<38} {snap.model_name[:18]:<20} {snap.tables_count:<8} {created:<20}")
+        if snap.description:
+            click.echo(f"    └─ {snap.description}")
+    
+    click.echo("=" * 80)
+    click.echo(f"Total: {len(snapshots)} snapshot(s)")
+
+
+@snapshot.command("restore")
+@click.option(
+    "--id",
+    "snapshot_id",
+    type=str,
+    help="Snapshot ID to restore",
+)
+@click.option(
+    "--latest",
+    is_flag=True,
+    help="Restore the most recent snapshot",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be restored without applying",
+)
+@click.pass_context
+def snapshot_restore(
+    ctx: click.Context,
+    snapshot_id: str | None,
+    latest: bool,
+    dry_run: bool,
+) -> None:
+    """
+    Restore a semantic model from a snapshot.
+    
+    Use --latest for the most recent snapshot, or --id for a specific one.
+    """
+    from semantic_sync.core.sqlite_rollback import get_rollback_manager
+    
+    logger = get_logger(__name__)
+    
+    if not snapshot_id and not latest:
+        click.echo("Error: Please specify --id or --latest", err=True)
+        sys.exit(1)
+    
+    try:
+        manager = get_rollback_manager()
+        
+        # Get snapshot ID
+        if latest:
+            snap_info = manager.get_latest_snapshot()
+            if not snap_info:
+                click.echo("Error: No snapshots available", err=True)
+                sys.exit(1)
+            snapshot_id = snap_info.snapshot_id
+            click.echo(f"Using latest snapshot: {snapshot_id}")
+        
+        # Restore model
+        click.echo(f"\nRestoring from snapshot {snapshot_id}...")
+        model = manager.restore_snapshot(snapshot_id)
+        
+        click.echo()
+        click.echo("=" * 50)
+        if dry_run:
+            click.echo("[PREVIEW] Would restore:")
+        else:
+            click.echo("[OK] Snapshot restored!")
+        click.echo("=" * 50)
+        click.echo(f"  Model:         {model.name}")
+        click.echo(f"  Source:        {model.source}")
+        click.echo(f"  Tables:        {len(model.tables)}")
+        click.echo(f"  Measures:      {len(model.measures)}")
+        click.echo(f"  Relationships: {len(model.relationships)}")
+        click.echo("=" * 50)
+        
+        if dry_run:
+            click.echo("\nNo changes applied (dry run mode)")
+        else:
+            click.echo("\nModel data restored. Use 'sync' command to apply to target.")
+        
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Restore failed: {e}")
+        click.echo(f"\n[ERROR] {e}", err=True)
+        sys.exit(1)
+
+
+@snapshot.command("cleanup")
+@click.option(
+    "--keep",
+    "-k",
+    type=int,
+    default=10,
+    help="Number of recent snapshots to keep",
+)
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Skip confirmation",
+)
+def snapshot_cleanup(keep: int, force: bool) -> None:
+    """
+    Remove old snapshots, keeping only the most recent ones.
+    """
+    from semantic_sync.core.sqlite_rollback import get_rollback_manager
+    
+    manager = get_rollback_manager()
+    snapshots = manager.list_snapshots(limit=100)
+    
+    if len(snapshots) <= keep:
+        click.echo(f"Only {len(snapshots)} snapshot(s) exist. Nothing to clean up.")
+        return
+    
+    to_delete = len(snapshots) - keep
+    
+    if not force:
+        click.echo(f"This will delete {to_delete} old snapshot(s), keeping the {keep} most recent.")
+        if not click.confirm("Continue?"):
+            click.echo("Cancelled.")
+            return
+    
+    deleted = manager.cleanup_old_snapshots(keep_last=keep)
+    click.echo(f"[OK] Deleted {deleted} old snapshot(s).")
 
 
 def main() -> None:

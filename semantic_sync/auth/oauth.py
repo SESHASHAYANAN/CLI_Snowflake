@@ -5,6 +5,9 @@ Implements Client Credentials flow with token caching and automatic refresh.
 Uses MSAL (Microsoft Authentication Library) for secure token management.
 """
 
+from __future__ import annotations
+
+
 import json
 import os
 import threading
@@ -146,10 +149,14 @@ class FabricOAuthClient:
     # Power BI API scope
     DEFAULT_SCOPES = ["https://analysis.windows.net/powerbi/api/.default"]
 
+    # OneLake/Storage scope
+    STORAGE_SCOPES = ["https://storage.azure.com/.default"]
+
     def __init__(
         self,
         config: FabricConfig,
         cache: TokenCache | None = None,
+        scopes: list[str] | None = None,
     ) -> None:
         """
         Initialize OAuth client.
@@ -157,10 +164,12 @@ class FabricOAuthClient:
         Args:
             config: Fabric configuration with credentials
             cache: Optional token cache instance
+            scopes: Optional custom scopes (defaults to Power BI API)
         """
         self._config = config
         self._cache = cache or TokenCache()
         self._lock = threading.RLock()
+        self._custom_scopes = scopes  # Store custom scopes if provided
 
         # Initialize MSAL confidential client
         authority = f"https://login.microsoftonline.com/{config.tenant_id}"
@@ -170,7 +179,9 @@ class FabricOAuthClient:
             authority=authority,
         )
 
-        self._cache_key = f"fabric_{config.client_id}"
+        # Use different cache keys for different scopes
+        scope_suffix = "_storage" if scopes and "storage" in str(scopes) else ""
+        self._cache_key = f"fabric_{config.client_id}{scope_suffix}"
 
     def get_access_token(self, force_refresh: bool = False) -> str:
         """
@@ -196,8 +207,10 @@ class FabricOAuthClient:
             # Acquire new token
             logger.info("Acquiring new access token from Azure AD")
             try:
+                # Use custom scopes if provided, otherwise default
+                scopes = self._custom_scopes if self._custom_scopes else self.DEFAULT_SCOPES
                 result = self._msal_app.acquire_token_for_client(
-                    scopes=self.DEFAULT_SCOPES
+                    scopes=scopes
                 )
             except Exception as e:
                 raise AuthenticationError(

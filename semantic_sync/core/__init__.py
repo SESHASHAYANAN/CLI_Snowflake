@@ -1,5 +1,8 @@
 """Core modules for semantic-sync."""
 
+from __future__ import annotations
+
+
 from semantic_sync.core.snowflake_reader import SnowflakeReader
 from semantic_sync.core.snowflake_writer import SnowflakeWriter
 from semantic_sync.core.snowflake_semantic_writer import (
@@ -12,6 +15,13 @@ from semantic_sync.core.fabric_model_parser import FabricModelParser
 from semantic_sync.core.semantic_formatter import SemanticFormatter
 from semantic_sync.core.change_detector import ChangeDetector, ChangeType, Change
 from semantic_sync.core.semantic_updater import SemanticUpdater, SyncDirection, SyncMode
+from semantic_sync.core.sqlite_rollback import RollbackManager, get_rollback_manager
+from semantic_sync.core.fabric_snowflake_semantic_pipeline import (
+    FabricToSnowflakePipeline,
+    SemanticSyncConfig,
+    SyncResult as PipelineSyncResult,
+    sync_fabric_to_snowflake as sync_pipeline,
+)
 
 __all__ = [
     "SnowflakeReader",
@@ -28,4 +38,12 @@ __all__ = [
     "SemanticUpdater",
     "SyncDirection",
     "SyncMode",
+    "RollbackManager",
+    "get_rollback_manager",
+    # Semantic Pipeline
+    "FabricToSnowflakePipeline",
+    "SemanticSyncConfig",
+    "PipelineSyncResult",
+    "sync_pipeline",
 ]
+

@@ -1,5 +1,8 @@
 """Utility modules for semantic-sync."""
 
+from __future__ import annotations
+
+
 from semantic_sync.utils.logger import get_logger, setup_logging
 from semantic_sync.utils.exceptions import (
     SemanticSyncError,

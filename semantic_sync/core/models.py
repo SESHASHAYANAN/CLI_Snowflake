@@ -5,6 +5,9 @@ Pydantic models representing semantic entities that can be
 synchronized between Snowflake and Fabric.
 """
 
+from __future__ import annotations
+
+
 from datetime import datetime
 from enum import Enum
 from typing import Any

@@ -5,6 +5,9 @@ Orchestrates the synchronization process between Fabric and Snowflake,
 applying detected changes to the target system.
 """
 
+from __future__ import annotations
+
+
 from datetime import datetime
 from enum import Enum
 from typing import Any

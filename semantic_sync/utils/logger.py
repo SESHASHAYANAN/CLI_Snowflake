@@ -5,11 +5,14 @@ Provides structured logging with rich console output for CLI interactions
 and JSON formatting for production log aggregation.
 """
 
+from __future__ import annotations
+
+
 import logging
 import sys
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Dict, Union
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -121,7 +124,7 @@ class SemanticSyncLogger:
             f"  [direction]Direction:[/direction] {direction}\n"
         )
 
-    def _format_message(self, message: str, extra: dict[str, Any]) -> str:
+    def _format_message(self, message: str, extra: Dict[str, Any]) -> str:
         """Format message with extra context."""
         if extra:
             context = " | ".join(f"{k}={v}" for k, v in extra.items())
@@ -130,7 +133,7 @@ class SemanticSyncLogger:
 
 
 # Logger cache
-_loggers: dict[str, SemanticSyncLogger] = {}
+_loggers: Dict[str, SemanticSyncLogger] = {}
 
 
 def get_logger(name: str = "semantic-sync") -> SemanticSyncLogger:
@@ -141,7 +144,7 @@ def get_logger(name: str = "semantic-sync") -> SemanticSyncLogger:
 
 
 def setup_logging(
-    level: LogLevel | str = LogLevel.INFO,
+    level: Union[LogLevel, str] = LogLevel.INFO,
     json_output: bool = False,
 ) -> None:
     """

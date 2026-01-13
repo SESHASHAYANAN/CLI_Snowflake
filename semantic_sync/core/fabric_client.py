@@ -5,6 +5,9 @@ Handles authenticated communication with the Power BI / Fabric REST API
 for reading and writing semantic model definitions.
 """
 
+from __future__ import annotations
+
+
 from typing import Any
 
 import requests

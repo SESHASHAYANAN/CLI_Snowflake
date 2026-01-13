@@ -5,6 +5,9 @@ All exceptions inherit from SemanticSyncError to allow catching
 all application-specific errors with a single except clause.
 """
 
+from __future__ import annotations
+
+
 from typing import Any
 
 

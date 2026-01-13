@@ -1,87 +1,97 @@
-# ============================================================================
-# Semantic-Sync Configuration
-# ============================================================================
-# This file contains the default configuration for semantic-sync.
-# Environment variables take precedence over values defined here.
-#
-# Required Environment Variables:
-#   - SNOWFLAKE_ACCOUNT
-#   - SNOWFLAKE_USER
-#   - SNOWFLAKE_PASSWORD
-#   - SNOWFLAKE_WAREHOUSE
-#   - SNOWFLAKE_DATABASE
-#   - SNOWFLAKE_SEMANTIC_VIEW
-#   - FABRIC_TENANT_ID
-#   - FABRIC_CLIENT_ID
-#   - FABRIC_CLIENT_SECRET
-#   - FABRIC_WORKSPACE_ID
-#   - FABRIC_DATASET_ID
-# ============================================================================
+# Fabric-Snowflake Sync Configuration
+# ====================================
+# This configuration file defines the sync behavior between
+# Microsoft Fabric and Snowflake for the analytics architecture.
 
-# Snowflake Configuration
-# -----------------------
-# Connection details for Snowflake Semantic Views
+# Snowflake Connection (System of Record)
 snowflake:
-  # Account identifier (e.g., "xy12345.us-east-1")
-  account: "${SNOWFLAKE_ACCOUNT}"
+  account: "FA97567.central-india.azure"
+  user: "SYNC_SERVICE"
+  # Password loaded from environment: SNOWFLAKE_PASSWORD
+  warehouse: "COMPUTE_WAREHOUSE"
+  database: "ANALYTICS_DB"
+  schema: "SEMANTIC_LAYER"
+  role: "POWERBI_SERVICE"
+  semantic_view_name: "SEMANTIC_VIEW"
 
-  # Authentication
-  user: "${SNOWFLAKE_USER}"
-  password: "${SNOWFLAKE_PASSWORD}"
-
-  # Warehouse for compute
-  warehouse: "${SNOWFLAKE_WAREHOUSE}"
-
-  # Database and schema containing semantic views
-  database: "${SNOWFLAKE_DATABASE}"
-  schema: "PUBLIC"
-
-  # Optional: Snowflake role to use
-  role: null
-
-  # Name of the semantic view to sync
-  semantic_view_name: "${SNOWFLAKE_SEMANTIC_VIEW}"
-
-
-# Microsoft Fabric Configuration
-# ------------------------------
-# OAuth 2.0 Client Credentials for Fabric API access
+# Microsoft Fabric Connection (Orchestration Layer)
 fabric:
-  # Azure AD / Entra ID tenant
-  tenant_id: "${FABRIC_TENANT_ID}"
-
-  # Application (client) registration
-  client_id: "${FABRIC_CLIENT_ID}"
-  client_secret: "${FABRIC_CLIENT_SECRET}"
-
-  # Fabric workspace and dataset identifiers
-  workspace_id: "${FABRIC_WORKSPACE_ID}"
-  dataset_id: "${FABRIC_DATASET_ID}"
-
-  # Power BI REST API base (do not change unless using sovereign cloud)
+  # Azure AD credentials loaded from environment
+  # FABRIC_TENANT_ID, FABRIC_CLIENT_ID, FABRIC_CLIENT_SECRET
+  workspace_id: "1a5e9594-c112-43d0-8cdd-012f7746c1b1"
+  dataset_id: "3667b95a-bfd4-44b8-986a-8e9d39512f46"
   api_base_url: "https://api.powerbi.com/v1.0/myorg"
 
-
-# Sync Configuration
-# ------------------
-# Controls sync behavior and performance
+# Sync Behavior
 sync:
-  # Number of items to process per batch
+  # Direction: sf-to-fabric | fabric-to-sf | bidirectional
+  direction: "sf-to-fabric"
+  
+  # Mode: full | incremental | metadata-only
+  mode: "incremental"
+  
+  # Batch size for sync operations
   batch_size: 100
-
-  # Maximum time (seconds) for sync operations
+  
+  # Timeout in seconds
   timeout_seconds: 300
-
-  # Retry configuration for transient failures
+  
+  # Retry configuration
   max_retries: 3
   retry_delay_seconds: 5
-
-  # Metadata storage
+  
+  # Change detection
+  change_detection: true
+  
+  # Store sync metadata for auditing
   store_metadata: true
   metadata_path: ".semantic-sync/metadata"
+  
+  # Schedule (cron format) - for external scheduler
+  # "0 */4 * * *" = Every 4 hours
+  schedule: "0 */4 * * *"
 
+# Semantic Model Mapping
+# Maps Snowflake views to Fabric tables
+model_mapping:
+  tables:
+    - snowflake_view: "V_DIM_CUSTOMER"
+      fabric_table: "DimCustomer"
+      sync_mode: "full"
+      
+    - snowflake_view: "V_DIM_PRODUCT"
+      fabric_table: "DimProduct"
+      sync_mode: "full"
+      
+    - snowflake_view: "V_DIM_DATE"
+      fabric_table: "DimDate"
+      sync_mode: "full"
+      
+    - snowflake_view: "V_FACT_SALES"
+      fabric_table: "FactSales"
+      sync_mode: "incremental"
+      incremental_column: "CREATED_AT"
+      
+    - snowflake_view: "V_AGG_SALES_SUMMARY"
+      fabric_table: "AggSalesSummary"
+      sync_mode: "full"
 
 # Logging Configuration
-# ---------------------
-log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
-log_json: false    # Set to true for JSON log output (production)
+logging:
+  level: "INFO"  # DEBUG | INFO | WARNING | ERROR
+  format: "json"
+  output:
+    - type: "console"
+    - type: "file"
+      path: ".semantic-sync/logs/sync.log"
+      rotate_size_mb: 10
+      backup_count: 5
+
+# Alerting (optional)
+alerts:
+  enabled: false
+  # email:
+  #   enabled: true
+  #   recipients: ["data-platform@company.com"]
+  #   on_failure: true
+  #   on_success: false

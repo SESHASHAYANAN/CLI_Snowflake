@@ -5,6 +5,9 @@ Updates Snowflake Semantic Views with changes from external sources.
 Implements transactional updates for safety.
 """
 
+from __future__ import annotations
+
+
 from contextlib import contextmanager
 from typing import Any, Generator
 

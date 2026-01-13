@@ -1,5 +1,8 @@
 """Authentication modules for semantic-sync."""
 
+from __future__ import annotations
+
+
 from semantic_sync.auth.oauth import (
     FabricOAuthClient,
     TokenCache,

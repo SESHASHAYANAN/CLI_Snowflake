@@ -12,6 +12,9 @@ This module handles:
 Note: This uses REST API approach only - no Snowflake semantic layer SDK required.
 """
 
+from __future__ import annotations
+
+
 import json
 from contextlib import contextmanager
 from datetime import datetime

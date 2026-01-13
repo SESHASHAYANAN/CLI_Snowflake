@@ -1,5 +1,8 @@
 """Configuration management for semantic-sync."""
 
+from __future__ import annotations
+
+
 from semantic_sync.config.settings import (
     Settings,
     SnowflakeConfig,

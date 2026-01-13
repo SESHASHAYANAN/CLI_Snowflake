@@ -5,6 +5,9 @@ Uses Pydantic for validation and environment variable loading.
 Supports YAML configuration files with environment variable overrides.
 """
 
+from __future__ import annotations
+
+
 import os
 from enum import Enum
 from pathlib import Path

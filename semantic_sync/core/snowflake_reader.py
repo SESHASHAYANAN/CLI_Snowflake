@@ -4,6 +4,9 @@ Snowflake Semantic View reader.
 Extracts semantic metadata from Snowflake Semantic Views for synchronization.
 """
 
+from __future__ import annotations
+
+
 from contextlib import contextmanager
 from typing import Any, Generator
 

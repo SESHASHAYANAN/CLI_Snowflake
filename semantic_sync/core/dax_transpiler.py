@@ -4,6 +4,9 @@ DAX to SQL Transpiler.
 Converts basic DAX expressions to Snowflake-compatible SQL.
 """
 
+from __future__ import annotations
+
+
 import re
 from typing import Optional
 

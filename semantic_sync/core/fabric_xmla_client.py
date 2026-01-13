@@ -5,6 +5,9 @@ This module provides XMLA endpoint access for Import datasets that don't
 support the Push API /tables REST endpoint.
 """
 
+from __future__ import annotations
+
+
 from typing import Any
 import requests
 
@@ -94,12 +97,13 @@ class FabricXmlaClient:
     def get_tables(self) -> list[dict[str, Any]]:
         """
         Get all tables from the model using DMV queries.
+        Falls back to INFO.TABLES() DAX function if DMV fails.
 
         Returns:
             List of table definitions
         """
+        # Try TMSCHEMA_TABLES first (requires Premium/XMLA)
         try:
-            # Query for tables
             dmv_query = "SELECT [Name], [Description], [IsHidden] FROM $SYSTEM.TMSCHEMA_TABLES WHERE [ObjectType] = 'Table'"
             tables_rows = self._execute_dmv_query(dmv_query)
             
@@ -122,7 +126,7 @@ class FabricXmlaClient:
                             "dataType": col_row.get("[DataType]", "String"),
                             "isHidden": col_row.get("[IsHidden]", False),
                             "description": col_row.get("[Description]", ""),
-                            "isNullable": True  # Default, not always available in DMV
+                            "isNullable": True
                         })
                 
                 tables.append({
@@ -132,13 +136,110 @@ class FabricXmlaClient:
                     "columns": columns
                 })
             
-            logger.info(f"Retrieved {len(tables)} tables via DMV")
+            if tables:
+                logger.info(f"Retrieved {len(tables)} tables via TMSCHEMA DMV")
+                return tables
+            
+        except Exception as e:
+            logger.warning(f"TMSCHEMA DMV failed, trying INFO.TABLES fallback: {e}")
+        
+        # Fallback: Use INFO.TABLES() and INFO.COLUMNS() DAX functions
+        return self._get_tables_via_info_functions()
+    
+    def _get_tables_via_info_functions(self) -> list[dict[str, Any]]:
+        """
+        Get tables using INFO.TABLES() DAX function (available for all datasets).
+        """
+        try:
+            # INFO.TABLES() returns table metadata
+            dax_query = "EVALUATE INFO.TABLES()"
+            tables_rows = self._execute_dax_query(dax_query)
+            
+            tables = []
+            for table_row in tables_rows:
+                table_name = table_row.get("[Name]", table_row.get("Name", ""))
+                if not table_name:
+                    continue
+                
+                # Skip system tables
+                if table_name.startswith("DateTableTemplate") or table_name.startswith("LocalDateTable"):
+                    continue
+                
+                # Get columns for this table
+                columns = self._get_columns_for_table(table_name)
+                
+                tables.append({
+                    "name": table_name,
+                    "description": table_row.get("[Description]", table_row.get("Description", "")),
+                    "isHidden": table_row.get("[IsHidden]", table_row.get("IsHidden", False)),
+                    "columns": columns
+                })
+            
+            logger.info(f"Retrieved {len(tables)} tables via INFO.TABLES()")
             return tables
             
         except Exception as e:
-            logger.error(f"Failed to retrieve tables via DMV: {e}")
-            # Return empty list instead of raising to allow graceful degradation
+            logger.error(f"Failed to retrieve tables via INFO.TABLES: {e}")
             return []
+    
+    def _get_columns_for_table(self, table_name: str) -> list[dict[str, Any]]:
+        """Get columns for a specific table using INFO.COLUMNS()."""
+        try:
+            # Filter columns for this table
+            dax_query = f'EVALUATE FILTER(INFO.COLUMNS(), [TableName] = "{table_name}")'
+            columns_rows = self._execute_dax_query(dax_query)
+            
+            columns = []
+            for col_row in columns_rows:
+                col_name = col_row.get("[Name]", col_row.get("Name", col_row.get("[ColumnName]", col_row.get("ColumnName", ""))))
+                if col_name:
+                    # Map data type
+                    data_type = col_row.get("[DataType]", col_row.get("DataType", "String"))
+                    columns.append({
+                        "name": col_name,
+                        "dataType": str(data_type) if data_type else "String",
+                        "isHidden": col_row.get("[IsHidden]", col_row.get("IsHidden", False)),
+                        "description": col_row.get("[Description]", col_row.get("Description", "")),
+                        "isNullable": True
+                    })
+            
+            return columns
+            
+        except Exception as e:
+            logger.warning(f"Could not get columns for table {table_name}: {e}")
+            return []
+    
+    def _execute_dax_query(self, dax_query: str) -> list[dict[str, Any]]:
+        """
+        Execute a DAX query (more universally available than TMSCHEMA).
+        """
+        url = f"https://api.powerbi.com/v1.0/myorg/groups/{self._workspace_id}/datasets/{self._dataset_id}/executeQueries"
+        
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "queries": [{
+                "query": dax_query
+            }],
+            "serializerSettings": {
+                "includeNulls": False
+            }
+        }
+        
+        response = requests.post(url, headers=headers, json=payload)
+        
+        if response.status_code == 200:
+            result = response.json()
+            rows = result.get("results", [{}])[0].get("tables", [{}])[0].get("rows", [])
+            return rows
+        else:
+            raise ResourceNotFoundError(
+                f"DAX query failed with status {response.status_code}: {response.text}",
+                resource_type="dax_query"
+            )
 
     def get_measures(self) -> list[dict[str, Any]]:
         """

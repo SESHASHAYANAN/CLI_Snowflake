@@ -4,6 +4,9 @@ Fabric semantic model parser.
 Parses Power BI / Fabric semantic model definitions into normalized format.
 """
 
+from __future__ import annotations
+
+
 from typing import Any
 
 from semantic_sync.core.models import (
@@ -21,6 +24,20 @@ from semantic_sync.utils.exceptions import ResourceNotFoundError
 from semantic_sync.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Try to import OneLake client (optional dependency)
+try:
+    from semantic_sync.core.onelake_client import OneLakeClient
+    ONELAKE_AVAILABLE = True
+except ImportError:
+    ONELAKE_AVAILABLE = False
+
+# Try to import auto-metadata extractor
+try:
+    from semantic_sync.core.auto_metadata import get_auto_metadata_extractor
+    AUTO_METADATA_AVAILABLE = True
+except ImportError:
+    AUTO_METADATA_AVAILABLE = False
 
 
 class FabricModelParser:
@@ -89,6 +106,27 @@ class FabricModelParser:
                     
         except Exception as e:
             logger.warning(f"Metadata enrichment via DMV failed: {e}")
+        
+        # 3. Final fallback: Try OneLake for Lakehouse-backed datasets
+        if not tables and ONELAKE_AVAILABLE:
+            target_storage = dataset_info.get("targetStorageMode", "")
+            if target_storage in ("PremiumFiles", "Lakehouse"):
+                logger.info(f"Attempting OneLake fallback for Lakehouse-backed dataset")
+                try:
+                    tables = self._get_tables_via_onelake(dataset_name)
+                except Exception as e:
+                    logger.warning(f"OneLake fallback failed: {e}")
+        
+        # 4. Auto-metadata fallback: Use pre-defined metadata definitions
+        if not tables and AUTO_METADATA_AVAILABLE:
+            logger.info(f"Attempting auto-metadata fallback for '{dataset_name}'")
+            try:
+                extractor = get_auto_metadata_extractor()
+                if extractor.has_manual_definition(dataset_name):
+                    tables = extractor.get_manual_tables(dataset_name)
+                    logger.info(f"Loaded {len(tables)} tables from auto-metadata for '{dataset_name}'")
+            except Exception as e:
+                logger.warning(f"Auto-metadata fallback failed: {e}")
 
         if not tables and not measures:
              logger.warning("No tables or measures found. Model might be empty.")
@@ -158,6 +196,44 @@ class FabricModelParser:
                 resource_type="dataset",
                 resource_id=dataset_name
             )
+    
+    def _get_tables_via_onelake(self, dataset_name: str) -> list[SemanticTable]:
+        """
+        Get tables from OneLake for Lakehouse-backed datasets.
+        
+        Args:
+            dataset_name: Name of the dataset/Lakehouse
+            
+        Returns:
+            List of SemanticTable objects
+        """
+        if not ONELAKE_AVAILABLE:
+            return []
+        
+        try:
+            # Get workspace name
+            workspace_info = self._client.get_workspace(self._config.workspace_id)
+            workspace_name = workspace_info.get("name", "")
+            
+            if not workspace_name:
+                logger.warning("Could not determine workspace name for OneLake")
+                return []
+            
+            # Create OneLake client
+            onelake_client = OneLakeClient(self._config)
+            
+            # Get tables from Lakehouse
+            tables_data = onelake_client.get_lakehouse_tables(workspace_name, dataset_name)
+            
+            if tables_data:
+                logger.info(f"Retrieved {len(tables_data)} tables via OneLake")
+                return self._parse_tables(tables_data)
+            
+            return []
+            
+        except Exception as e:
+            logger.warning(f"OneLake table extraction failed: {e}")
+            return []
 
     def _parse_tables(self, tables_data: list[dict[str, Any]]) -> list[SemanticTable]:
         """Parse table definitions from Fabric API response."""
