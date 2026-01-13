@@ -471,6 +471,12 @@ SEMABRIDGE_BANNER = r"""
     help="Simulate sync without applying changes",
 )
 @click.option(
+    "--all",
+    "sync_all",
+    is_flag=True,
+    help="Sync ALL datasets in the workspace",
+)
+@click.option(
     "--mode",
     "-m",
     type=click.Choice(["full", "metadata-only"]),
@@ -487,6 +493,7 @@ SEMABRIDGE_BANNER = r"""
 def fabric_to_snowflake(
     ctx: click.Context,
     dry_run: bool,
+    sync_all: bool,
     mode: str,
     output: Optional[Path],
 ) -> None:
@@ -502,8 +509,11 @@ def fabric_to_snowflake(
         # Preview what would be synced (dry run)
         semantic-sync fabric-to-sf --dry-run
         
-        # Perform actual sync
+        # Sync specific dataset (configured in .env)
         semantic-sync fabric-to-sf
+        
+        # Sync ALL datasets in workspace
+        semantic-sync fabric-to-sf --all
         
         # Full metadata sync with report
         semantic-sync fabric-to-sf --mode full -o sync_report.json
@@ -522,7 +532,11 @@ def fabric_to_snowflake(
         click.echo("-" * 50)
         click.echo(f"  Source (Fabric):")
         click.echo(f"    Workspace:  {fabric_config.workspace_id}")
-        click.echo(f"    Dataset:    {fabric_config.dataset_id}")
+        if not sync_all:
+             click.echo(f"    Dataset:    {fabric_config.dataset_id or '(none)'}")
+        else:
+             click.echo(f"    Dataset:    [ALL DATASETS] (Ignoring configured FABRIC_DATASET_ID)")
+             
         click.echo(f"  Target (Snowflake):")
         click.echo(f"    Account:    {snowflake_config.account}")
         click.echo(f"    Database:   {snowflake_config.database}")
@@ -541,48 +555,92 @@ def fabric_to_snowflake(
         click.echo(f"{action} Fabric -> Snowflake (mode: {mode})")
         click.echo("-" * 50)
         
-        # Perform sync
-        result = updater.sync(
-            direction=SyncDirection.FABRIC_TO_SNOWFLAKE,
-            mode=sync_mode,
-            dry_run=dry_run,
-        )
-        
-        # Display results
-        click.echo()
-        click.echo("[Results]")
-        click.echo("-" * 50)
-        
-        if result.success:
-            status_symbol = "[OK]" if not dry_run else "[PREVIEW]"
-            status_text = "Sync Successful!" if not dry_run else "Dry Run Complete"
-            click.echo(f"{status_symbol} {status_text}")
-        else:
-            click.echo(f"[FAIL] Sync Failed: {result.error_message}", err=True)
+        if sync_all:
+            # Sync ALL datasets
+            results = updater.sync_all_workspace_datasets(
+                mode=sync_mode,
+                dry_run=dry_run,
+            )
             
-        click.echo(f"  Source Model:    {result.source_model}")
-        click.echo(f"  Target:          {result.target_model}")
-        click.echo(f"  Changes Applied: {result.changes_applied}")
-        click.echo(f"  Changes Skipped: {result.changes_skipped}")
-        click.echo(f"  Errors:          {result.errors}")
-        click.echo(f"  Duration:        {result.duration_seconds:.2f}s")
-        
-        # Save report if requested
-        if output:
-            import json
-            with open(output, "w") as f:
-                json.dump(result.to_dict(), f, indent=2)
-            click.echo(f"\nReport saved to: {output}")
-            
-        # Summary
-        if result.success and not dry_run:
+            # Summary for multiple datasets
             click.echo()
-            click.echo("=" * 50)
-            click.echo("Zero-gravity transmission complete!")
-            click.echo("Semantic metadata has landed in Snowflake.")
-            click.echo("=" * 50)
+            click.echo("[Workspace Sync Summary]")
+            click.echo("-" * 50)
+            success_count = sum(1 for r in results if r.success)
+            fail_count = len(results) - success_count
             
-        sys.exit(0 if result.success else 1)
+            click.echo(f"Total Datasets: {len(results)}")
+            click.echo(f"Successful:     {success_count}")
+            click.echo(f"Failed:         {fail_count}")
+            
+            if success_count > 0 and not dry_run:
+                click.echo("\nZero-gravity transmission complete for multiple models!")
+            
+            # Save consolidated report
+            if output:
+                 import json
+                 report = {
+                     "summary": {
+                         "total": len(results),
+                         "success": success_count,
+                         "failed": fail_count
+                     },
+                     "details": [r.to_dict() for r in results]
+                 }
+                 with open(output, "w") as f:
+                     json.dump(report, f, indent=2)
+                 click.echo(f"\nReport saved to: {output}")
+            
+            sys.exit(0 if fail_count == 0 else 1)
+            
+        else:
+            # Single dataset sync (original behavior)
+            if not fabric_config.dataset_id:
+                click.echo("[ERROR] No Dataset ID configured. Use --all to sync workspace or set FABRIC_DATASET_ID.", err=True)
+                sys.exit(1)
+                
+            # Perform sync
+            result = updater.sync(
+                direction=SyncDirection.FABRIC_TO_SNOWFLAKE,
+                mode=sync_mode,
+                dry_run=dry_run,
+            )
+            
+            # Display results
+            click.echo()
+            click.echo("[Results]")
+            click.echo("-" * 50)
+            
+            if result.success:
+                status_symbol = "[OK]" if not dry_run else "[PREVIEW]"
+                status_text = "Sync Successful!" if not dry_run else "Dry Run Complete"
+                click.echo(f"{status_symbol} {status_text}")
+            else:
+                click.echo(f"[FAIL] Sync Failed: {result.error_message}", err=True)
+                
+            click.echo(f"  Source Model:    {result.source_model}")
+            click.echo(f"  Target:          {result.target_model}")
+            click.echo(f"  Changes Applied: {result.changes_applied}")
+            click.echo(f"  Changes Skipped: {result.changes_skipped}")
+            click.echo(f"  Errors:          {result.errors}")
+            click.echo(f"  Duration:        {result.duration_seconds:.2f}s")
+            
+            # Save report if requested
+            if output:
+                import json
+                with open(output, "w") as f:
+                    json.dump(result.to_dict(), f, indent=2)
+                click.echo(f"\nReport saved to: {output}")
+                
+            # Summary
+            if result.success and not dry_run:
+                click.echo()
+                click.echo("=" * 50)
+                click.echo("Zero-gravity transmission complete!")
+                click.echo("Semantic metadata has landed in Snowflake.")
+                click.echo("=" * 50)
+                
+            sys.exit(0 if result.success else 1)
         
     except Exception as e:
         logger.error(f"Sync failed: {e}")

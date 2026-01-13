@@ -1,0 +1,31 @@
+{
+  "name": "demo Table_PushSync",
+  "defaultMode": "Push",
+  "tables": [
+    {
+      "name": "DemoProducts",
+      "columns": [
+        {
+          "name": "ProductID",
+          "dataType": "String"
+        },
+        {
+          "name": "ProductName",
+          "dataType": "String"
+        },
+        {
+          "name": "Category",
+          "dataType": "String"
+        },
+        {
+          "name": "Price",
+          "dataType": "String"
+        },
+        {
+          "name": "InStock",
+          "dataType": "String"
+        }
+      ]
+    }
+  ]
+}

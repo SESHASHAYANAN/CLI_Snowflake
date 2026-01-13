@@ -1,0 +1,21 @@
+name: demo Table
+description: Demo semantic model for testing sync functionality
+tables:
+  - name: DemoProducts
+    description: Sample products table for demonstration
+    columns:
+      - name: ProductID
+        data_type: Int64
+        description: Unique product identifier
+      - name: ProductName
+        data_type: String
+        description: Name of the product
+      - name: Category
+        data_type: String
+        description: Product category
+      - name: Price
+        data_type: Double
+        description: Unit price
+      - name: InStock
+        data_type: Boolean
+        description: Stock availability flag

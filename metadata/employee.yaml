@@ -1,0 +1,30 @@
+name: Employee
+description: Employee directory and organizational data
+tables:
+  - name: Employees
+    description: Master list of employees
+    columns:
+      - name: EmployeeID
+        data_type: Int64
+        description: Unique identifier for the employee
+      - name: FirstName
+        data_type: String
+        description: Employee first name
+      - name: LastName
+        data_type: String
+        description: Employee last name
+      - name: Email
+        data_type: String
+        description: Work email address
+      - name: Department
+        data_type: String
+        description: Department name
+      - name: JobTitle
+        data_type: String
+        description: Current job title
+      - name: StartDate
+        data_type: DateTime
+        description: Date of joining
+      - name: IsActive
+        data_type: Boolean
+        description: Active status flag

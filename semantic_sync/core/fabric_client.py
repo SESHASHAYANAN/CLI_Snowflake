@@ -130,6 +130,122 @@ class FabricClient:
             return {"raw_response": response.text}
 
     @retry(
+        retry=retry_if_exception_type((ConnectionError, RateLimitError)),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+    )
+    def get_semantic_model_definition(self, dataset_id: str) -> dict[str, Any]:
+        """
+        Get semantic model definition (BIM) using Fabric V1 API.
+        
+        Handles Long Running Operations (LRO) with polling.
+        
+        Args:
+            dataset_id: The dataset (item) ID
+            
+        Returns:
+            Dictionary containing the model definition (parts, etc.)
+            
+        Raises:
+                ResourceNotFoundError: If model not found
+                ConnectionError: If API fails
+        """
+        # Fabric API URL
+        url = f"https://api.fabric.microsoft.com/v1/workspaces/{self._config.workspace_id}/items/{dataset_id}/getDefinition"
+        
+        try:
+            # Create ad-hoc client for Fabric scope
+            fabric_oauth = FabricOAuthClient(
+                self._config,
+                scopes=["https://api.fabric.microsoft.com/.default"]
+            )
+            token = fabric_oauth.get_access_token()
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
+            
+            response = requests.post(url, headers=headers)
+            
+            if response.status_code == 202:
+                # LRO Pattern
+                import time
+                location = response.headers.get("Location") or response.headers.get("Azure-AsyncOperation")
+                retry_after = int(response.headers.get("Retry-After", 10))
+                
+                if not location:
+                     raise ConnectionError(f"LRO accepted but no location header: {response.text}")
+                
+                logger.info(f"Model definition generation started (LRO). Polling {location}...")
+                
+                # Poll for completion
+                start_time = time.time()
+                result_location = None
+                
+                while time.time() - start_time < 300: # 5 min timeout
+                    time.sleep(retry_after)
+                    
+                    poll_response = requests.get(location, headers=headers)
+                    if poll_response.status_code != 200:
+                        logger.warning(f"Poll gave status {poll_response.status_code}")
+                        continue
+                        
+                    status_data = poll_response.json()
+                    status = status_data.get("status")
+                    
+                    if status == "Succeeded":
+                        logger.info("Definition generation succeeded.")
+                        
+                        # Check if definition is in the response
+                        if "definition" in status_data:
+                            return status_data
+                        if "result" in status_data and "definition" in status_data.get("result", {}):
+                            return status_data["result"]
+                        
+                        # Check for result location in headers or body
+                        result_location = poll_response.headers.get("Location")
+                        if not result_location:
+                            # Try to get from the initial URL with /result suffix
+                            result_location = location.replace("/operations/", "/operationResults/")
+                        
+                        break
+                        
+                    if status in ["Failed", "Canceled"]:
+                         error = status_data.get("error", {})
+                         raise ConnectionError(f"Definition retrieval failed: {error}")
+                
+                # Fetch the actual result if we have a location
+                if result_location:
+                    logger.info(f"Fetching definition result from: {result_location}")
+                    result_response = requests.get(result_location, headers=headers)
+                    if result_response.status_code == 200:
+                        return result_response.json()
+                
+                # If still no result, try fetching from the getDefinition endpoint directly
+                logger.info("Trying to fetch definition result directly...")
+                result_url = f"https://api.fabric.microsoft.com/v1/workspaces/{self._config.workspace_id}/semanticModels/{dataset_id}/getDefinition"
+                result_response = requests.get(url.replace("/getDefinition", ""), headers=headers)
+                
+                if result_response.status_code == 200:
+                    return result_response.json()
+                    
+                raise ConnectionError("Could not retrieve definition result after LRO succeeded")
+
+            elif response.status_code == 200:
+                return response.json()
+            
+            elif response.status_code == 404:
+                raise ResourceNotFoundError(f"Model {dataset_id} definition not found")
+                
+            else:
+                self._handle_response(response)
+                return {}
+                
+        except RequestException as e:
+            raise ConnectionError(f"Failed to get definition: {e}") from e
+
+    @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type(AuthenticationError),
@@ -236,6 +352,9 @@ class FabricClient:
             Dataset metadata
         """
         ds_id = dataset_id or self._config.dataset_id
+        if not ds_id:
+            raise ValueError("Dataset ID not provided and no default configured")
+            
         endpoint = f"/groups/{self._config.workspace_id}/datasets/{ds_id}"
         return self.get(endpoint)
 
@@ -250,6 +369,9 @@ class FabricClient:
             List of table definitions
         """
         ds_id = dataset_id or self._config.dataset_id
+        if not ds_id:
+            raise ValueError("Dataset ID not provided and no default configured")
+
         endpoint = f"/groups/{self._config.workspace_id}/datasets/{ds_id}/tables"
         response = self.get(endpoint)
         return response.get("value", [])
@@ -304,6 +426,9 @@ class FabricClient:
             Update response
         """
         ds_id = dataset_id or self._config.dataset_id
+        if not ds_id:
+            raise ValueError("Dataset ID not provided and no default configured")
+
         endpoint = f"/groups/{self._config.workspace_id}/datasets/{ds_id}/tables"
         return self.post(endpoint, data={"tables": tables})
 

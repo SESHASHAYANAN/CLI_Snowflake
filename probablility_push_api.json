@@ -1,0 +1,19 @@
+{
+  "name": "probablility_PushSync",
+  "defaultMode": "Push",
+  "tables": [
+    {
+      "name": "probability_data",
+      "columns": [
+        {
+          "name": "Event",
+          "dataType": "String"
+        },
+        {
+          "name": "Probability",
+          "dataType": "Double"
+        }
+      ]
+    }
+  ]
+}

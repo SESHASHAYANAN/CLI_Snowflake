@@ -176,12 +176,81 @@ class SemanticUpdater:
             self._snowflake_semantic_writer = SnowflakeSemanticWriter(self._snowflake_config)
         return self._snowflake_semantic_writer
 
+    def sync_all_workspace_datasets(
+        self,
+        mode: SyncMode = SyncMode.METADATA_ONLY,
+        dry_run: bool = False,
+    ) -> list[SyncResult]:
+        """
+        Sync ALL datasets in the configured workspace to Snowflake.
+
+        Args:
+            mode: Sync mode
+            dry_run: Simulate only
+
+        Returns:
+            List of SyncResult objects for each dataset
+        """
+        logger.info(f"Starting workspace sync (Workspace ID: {self._fabric_config.workspace_id})")
+        
+        client = self._get_fabric_client()
+        try:
+            datasets = client.list_workspace_datasets()
+        except Exception as e:
+            logger.error(f"Failed to list datasets in workspace: {e}")
+            raise
+
+        logger.info(f"Found {len(datasets)} datasets provided by Fabric")
+        
+        results = []
+        for ds in datasets:
+            ds_name = ds.get("name", "Unknown")
+            ds_id = ds.get("id")
+            
+            # Skip invalid or unsupported datasets if necessary
+            # e.g. check configuredBy or specific properties
+            
+            logger.info(f"Syncing dataset: {ds_name} ({ds_id})")
+            print(f"\nProcessing dataset: {ds_name}...")
+            
+            try:
+                result = self.sync(
+                    direction=SyncDirection.FABRIC_TO_SNOWFLAKE,
+                    mode=mode,
+                    dry_run=dry_run,
+                    dataset_id=ds_id,
+                )
+                results.append(result)
+                
+                status = "[OK]" if result.success else "[FAIL]"
+                print(f"  {status} {result.error_message or 'Success'}")
+                
+            except Exception as e:
+                logger.error(f"Sync failed for dataset {ds_name}: {e}")
+                print(f"  [ERROR] {e}")
+                results.append(SyncResult(
+                    success=False,
+                    direction=SyncDirection.FABRIC_TO_SNOWFLAKE,
+                    mode=mode,
+                    changes_applied=0,
+                    changes_skipped=0,
+                    errors=1,
+                    started_at=datetime.utcnow(),
+                    completed_at=datetime.utcnow(),
+                    source_model=ds_name,
+                    dry_run=dry_run,
+                    error_message=str(e),
+                ))
+        
+        return results
+
     def sync(
         self,
         direction: SyncDirection,
         mode: SyncMode = SyncMode.INCREMENTAL,
         dry_run: bool = False,
         validate_only: bool = False,
+        dataset_id: str | None = None,
     ) -> SyncResult:
         """
         Perform semantic model synchronization.
@@ -191,6 +260,7 @@ class SemanticUpdater:
             mode: Sync mode (full, incremental, metadata-only)
             dry_run: If True, simulate sync without applying changes
             validate_only: If True, only validate and return change report
+            dataset_id: Optional dataset ID to sync (overrides config)
 
         Returns:
             SyncResult with operation details
@@ -201,7 +271,7 @@ class SemanticUpdater:
         started_at = datetime.utcnow()
         logger.info(
             f"Starting sync: {direction.value}, mode={mode.value}, "
-            f"dry_run={dry_run}, validate_only={validate_only}"
+            f"dry_run={dry_run}, validate_only={validate_only}, dataset_id={dataset_id}"
         )
 
         try:
@@ -211,6 +281,7 @@ class SemanticUpdater:
                     dry_run=dry_run,
                     validate_only=validate_only,
                     started_at=started_at,
+                    dataset_id=dataset_id,
                 )
             else:
                 return self._sync_snowflake_to_fabric(
@@ -241,6 +312,7 @@ class SemanticUpdater:
         dry_run: bool,
         validate_only: bool,
         started_at: datetime,
+        dataset_id: str | None = None,
     ) -> SyncResult:
         """
         Sync from Fabric to Snowflake (metadata-only, REST API approach).
@@ -249,9 +321,9 @@ class SemanticUpdater:
         and writes the metadata to Snowflake using SQL (no XMLA required).
         """
         # Read source model from Fabric
-        logger.info("Reading source model from Fabric via REST API")
+        logger.info(f"Reading source model from Fabric via REST API{' (ID: ' + dataset_id + ')' if dataset_id else ''}")
         fabric_parser = self._get_fabric_parser()
-        source_model = fabric_parser.read_semantic_model()
+        source_model = fabric_parser.read_semantic_model(dataset_id=dataset_id)
         
         logger.info(f"Fabric model loaded: {source_model.name}")
         logger.info(f"  Tables: {len(source_model.tables)}")
@@ -725,21 +797,33 @@ class SemanticUpdater:
                 current_tables_map = {t["name"]: t for t in current_tables}
                 
                 for table_name, col_changes in columns_to_add_by_table.items():
-                    if table_name not in current_tables_map:
-                        # Table doesn't exist and wasn't created above - skip
-                        logger.warning(f"Skipping columns for non-existent table: {table_name}")
-                        for col_change in col_changes:
-                            results["skipped"] += 1
-                            results["details"].append({
-                                "type": "added",
-                                "entity": "column",
-                                "name": col_change.entity_name,
-                                "status": "skipped",
-                                "reason": f"Table {table_name} does not exist",
-                            })
-                        continue
+                    target_table_name = table_name
                     
-                    current_table_def = current_tables_map[table_name]
+                    if table_name not in current_tables_map:
+                        # Try case-insensitive match
+                        found_match = False
+                        for existing_name in current_tables_map:
+                            if existing_name.lower() == table_name.lower():
+                                target_table_name = existing_name
+                                found_match = True
+                                logger.info(f"Case-insensitive match: '{table_name}' -> '{target_table_name}'")
+                                break
+                        
+                        if not found_match:
+                            # Table doesn't exist and wasn't created above - skip
+                            logger.warning(f"Skipping columns for non-existent table: {table_name}")
+                            for col_change in col_changes:
+                                results["skipped"] += 1
+                                results["details"].append({
+                                    "type": "added",
+                                    "entity": "column",
+                                    "name": col_change.entity_name,
+                                    "status": "skipped",
+                                    "reason": f"Table {table_name} does not exist",
+                                })
+                            continue
+                    
+                    current_table_def = current_tables_map[target_table_name]
                     current_columns = current_table_def.get("columns", [])
                     
                     new_columns_def = []

@@ -1,0 +1,31 @@
+{
+  "name": "new_rep_PushSync",
+  "defaultMode": "Push",
+  "tables": [
+    {
+      "name": "Representatives",
+      "columns": [
+        {
+          "name": "rep_id",
+          "dataType": "Int64"
+        },
+        {
+          "name": "name",
+          "dataType": "String"
+        },
+        {
+          "name": "region",
+          "dataType": "String"
+        },
+        {
+          "name": "email",
+          "dataType": "String"
+        },
+        {
+          "name": "quota",
+          "dataType": "Double"
+        }
+      ]
+    }
+  ]
+}

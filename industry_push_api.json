@@ -1,0 +1,19 @@
+{
+  "name": "industry_PushSync",
+  "defaultMode": "Push",
+  "tables": [
+    {
+      "name": "industry_data",
+      "columns": [
+        {
+          "name": "IndustryName",
+          "dataType": "String"
+        },
+        {
+          "name": "Sector",
+          "dataType": "String"
+        }
+      ]
+    }
+  ]
+}

@@ -76,11 +76,16 @@ class MetadataRegistry:
                         else:
                             metadata = json.load(f)
                     
-                    self._file_metadata_cache[model_name] = metadata
+                    # Store with lowercase key for case-insensitive lookup
+                    self._file_metadata_cache[model_name.lower()] = metadata
                     logger.info(f"Loaded metadata for model '{model_name}' from {file_path.name}")
                     
                 except Exception as e:
                     logger.warning(f"Failed to load metadata file {file_path}: {e}")
+    
+    def _normalize_name(self, name: str) -> str:
+        """Normalize model name for lookup (lowercase, spaces to underscores)."""
+        return name.lower().replace(" ", "_").replace("-", "_")
     
     def has_manual_definition(self, model_name: str) -> bool:
         """
@@ -92,9 +97,12 @@ class MetadataRegistry:
         Returns:
             True if manual definition exists
         """
+        normalized = self._normalize_name(model_name)
         return (
+            normalized in MANUAL_METADATA_REGISTRY or
+            normalized in self._file_metadata_cache or
             model_name.lower() in MANUAL_METADATA_REGISTRY or
-            model_name in self._file_metadata_cache
+            model_name.lower() in self._file_metadata_cache
         )
     
     def get_manual_tables(self, model_name: str) -> list[SemanticTable]:
@@ -107,15 +115,27 @@ class MetadataRegistry:
         Returns:
             List of SemanticTable objects
         """
+        model_key = model_name.lower()
+        normalized_key = self._normalize_name(model_name)
+        
+        metadata = None
+        
         # Check file-based metadata first (takes precedence)
-        if model_name in self._file_metadata_cache:
-            metadata = self._file_metadata_cache[model_name]
+        if model_key in self._file_metadata_cache:
+            metadata = self._file_metadata_cache[model_key]
             logger.info(f"Using file-based metadata for '{model_name}'")
+        elif normalized_key in self._file_metadata_cache:
+            metadata = self._file_metadata_cache[normalized_key]
+            logger.info(f"Using file-based metadata for '{model_name}' (normalized)")
         # Fall back to built-in registry
-        elif model_name.lower() in MANUAL_METADATA_REGISTRY:
-            metadata = MANUAL_METADATA_REGISTRY[model_name.lower()]
+        elif model_key in MANUAL_METADATA_REGISTRY:
+            metadata = MANUAL_METADATA_REGISTRY[model_key]
             logger.info(f"Using built-in metadata registry for '{model_name}'")
-        else:
+        elif normalized_key in MANUAL_METADATA_REGISTRY:
+            metadata = MANUAL_METADATA_REGISTRY[normalized_key]
+            logger.info(f"Using built-in metadata registry for '{model_name}' (normalized)")
+        
+        if not metadata:
             logger.warning(f"No manual metadata found for '{model_name}'")
             return []
         

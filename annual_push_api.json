@@ -1,0 +1,19 @@
+{
+  "name": "annual_PushSync",
+  "defaultMode": "Push",
+  "tables": [
+    {
+      "name": "annual_data",
+      "columns": [
+        {
+          "name": "Year",
+          "dataType": "Int64"
+        },
+        {
+          "name": "Value",
+          "dataType": "Double"
+        }
+      ]
+    }
+  ]
+}

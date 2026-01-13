@@ -1,0 +1,43 @@
+{
+  "name": "Employee_PushSync",
+  "defaultMode": "Push",
+  "tables": [
+    {
+      "name": "Employees",
+      "columns": [
+        {
+          "name": "EmployeeID",
+          "dataType": "String"
+        },
+        {
+          "name": "FirstName",
+          "dataType": "String"
+        },
+        {
+          "name": "LastName",
+          "dataType": "String"
+        },
+        {
+          "name": "Email",
+          "dataType": "String"
+        },
+        {
+          "name": "Department",
+          "dataType": "String"
+        },
+        {
+          "name": "JobTitle",
+          "dataType": "String"
+        },
+        {
+          "name": "StartDate",
+          "dataType": "String"
+        },
+        {
+          "name": "IsActive",
+          "dataType": "String"
+        }
+      ]
+    }
+  ]
+}

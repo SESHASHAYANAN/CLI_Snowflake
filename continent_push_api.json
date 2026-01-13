@@ -1,0 +1,15 @@
+{
+  "name": "continent_PushSync",
+  "defaultMode": "Push",
+  "tables": [
+    {
+      "name": "continent 1",
+      "columns": [
+        {
+          "name": "Column1",
+          "dataType": "String"
+        }
+      ]
+    }
+  ]
+}

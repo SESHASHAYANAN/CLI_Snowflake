@@ -8,6 +8,8 @@ from __future__ import annotations
 
 
 from typing import Any
+import json
+import base64
 
 from semantic_sync.core.models import (
     SemanticModel,
@@ -75,6 +77,31 @@ class FabricModelParser:
         
         logger.info(f"Dataset '{dataset_name}' ({dataset_type}) - using REST API")
         
+        # 0. QUICK CHECK: Use manual metadata if available (skips slow API calls)
+        if METADATA_REGISTRY_AVAILABLE:
+            try:
+                registry = get_metadata_registry()
+                logger.info(f"Checking manual definition for: '{dataset_name}'")
+                has_def = registry.has_manual_definition(dataset_name)
+                logger.info(f"Registry has definition? {has_def}")
+                
+                if has_def:
+                    logger.info(f"Found manual definition for '{dataset_name}' - skipping API calls")
+                    tables = registry.get_manual_tables(dataset_name)
+                    manual_desc = registry.get_manual_description(dataset_name)
+                    
+                    return SemanticModel(
+                        name=dataset_name,
+                        id=dataset_id,
+                        source="fabric",
+                        description=manual_desc or description,
+                        tables=tables,
+                        measures=[],
+                        relationships=[]
+                    )
+            except Exception as e:
+                logger.warning(f"Quick metadata check failed: {e}")
+            
         # 1. Get Tables (via standard REST API)
         tables = []
         try:
@@ -113,6 +140,20 @@ class FabricModelParser:
                     
         except Exception as e:
             logger.warning(f"Metadata enrichment via DMV failed: {e}")
+            
+        # 3. New Fallback: Fabric Definition API (BIM)
+        # Bypasses 404/400 errors for empty/unprocessed models by fetching the definition directly
+        if not tables or sum(1 for t in tables if t.columns) == 0:
+            logger.info(f"Attempting to fetch model definition via Fabric API...")
+            try:
+                definition = self._client.get_semantic_model_definition(dataset_id)
+                if definition:
+                    bim_tables = self._parse_bim_definition(definition)
+                    if bim_tables:
+                        tables = bim_tables
+                        logger.info(f"Loaded {len(tables)} tables from Fabric definition API")
+            except Exception as e:
+                logger.warning(f"Definition API fallback failed: {e}")
         
         # 3. Final fallback: Try OneLake for Lakehouse-backed datasets
         if not tables and ONELAKE_AVAILABLE:
@@ -344,3 +385,65 @@ class FabricModelParser:
             )
 
         return relationships
+
+    def _parse_bim_definition(self, definition_response: dict[str, Any]) -> list[SemanticTable]:
+        """Parse tables from BIM definition response."""
+        tables: list[SemanticTable] = []
+        
+        try:
+            # Handle response structure (sometimes nested in result)
+            definition = definition_response.get("definition", {})
+            if not definition and "result" in definition_response:
+                definition = definition_response["result"].get("definition", {})
+                
+            parts = definition.get("parts", [])
+            for part in parts:
+                if part.get("path") == "model.bim":
+                    payload = part.get("payload")
+                    payload_type = part.get("payloadType")
+                    
+                    if payload_type == "InlineBase64" and payload:
+                        try:
+                            decoded = base64.b64decode(payload).decode("utf-8")
+                            model_json = json.loads(decoded)
+                            model_data = model_json.get("model", {})
+                            
+                            for t_data in model_data.get("tables", []):
+                                t_name = t_data.get("name")
+                                if not t_name: 
+                                    continue
+                                    
+                                # Parse columns
+                                columns = []
+                                for c_data in t_data.get("columns", []):
+                                    c_name = c_data.get("name")
+                                    if not c_name:
+                                        continue
+                                    
+                                    dtype = c_data.get("dataType", "string")  # Default to string
+                                    # Normalize type if needed or use raw
+                                    
+                                    columns.append(SemanticColumn(
+                                        name=c_name,
+                                        data_type=dtype,
+                                        normalized_type=DataType.from_fabric(dtype),
+                                        is_nullable=c_data.get("isNullable", True),
+                                        description=c_data.get("description", ""),
+                                        is_hidden=c_data.get("isHidden", False)
+                                    ))
+                                
+                                tables.append(SemanticTable(
+                                    name=t_name,
+                                    description=t_data.get("description", ""),
+                                    columns=columns,
+                                    is_hidden=t_data.get("isHidden", False)
+                                ))
+                                
+                        except Exception as e:
+                            logger.error(f"Failed to parse model.bim payload: {e}")
+                            
+        except Exception as e:
+             logger.error(f"Error processing definition response: {e}")
+             
+        return tables
+

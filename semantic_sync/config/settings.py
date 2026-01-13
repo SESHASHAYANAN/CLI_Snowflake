@@ -91,19 +91,30 @@ class FabricConfig(BaseModel):
     client_id: str = Field(..., description="Azure AD application client ID")
     client_secret: SecretStr = Field(..., description="Azure AD application client secret")
     workspace_id: str = Field(..., description="Fabric workspace ID")
-    dataset_id: str = Field(..., description="Fabric semantic model (dataset) ID")
+    dataset_id: str | None = Field(default=None, description="Fabric semantic model (dataset) ID")
     api_base_url: str = Field(
         default="https://api.powerbi.com/v1.0/myorg",
         description="Power BI REST API base URL",
     )
 
-    @field_validator("tenant_id", "client_id", "workspace_id", "dataset_id")
+    @field_validator("tenant_id", "client_id", "workspace_id")
     @classmethod
     def validate_guid(cls, v: str, info: Any) -> str:
         """Validate GUID format."""
         if not v or not v.strip():
             raise ValueError(f"{info.field_name} cannot be empty")
         return v.strip()
+    
+    @field_validator("dataset_id")
+    @classmethod
+    def validate_dataset_id(cls, v: str | None, info: Any) -> str | None:
+        """Validate dataset ID if provided."""
+        if v is not None:
+             if not v.strip():
+                 # Treat empty string as None (valid for workspace sync)
+                 return None
+             return v.strip()
+        return None
 
     @property
     def token_scopes(self) -> list[str]:
@@ -151,7 +162,8 @@ class Settings(BaseSettings):
     fabric_client_id: str = Field(default="", alias="FABRIC_CLIENT_ID")
     fabric_client_secret: SecretStr = Field(default=SecretStr(""), alias="FABRIC_CLIENT_SECRET")
     fabric_workspace_id: str = Field(default="", alias="FABRIC_WORKSPACE_ID")
-    fabric_dataset_id: str = Field(default="", alias="FABRIC_DATASET_ID")
+    fabric_workspace_id: str = Field(default="", alias="FABRIC_WORKSPACE_ID")
+    fabric_dataset_id: str | None = Field(default=None, alias="FABRIC_DATASET_ID")
 
     # Sync settings
     sync_batch_size: int = Field(default=100)

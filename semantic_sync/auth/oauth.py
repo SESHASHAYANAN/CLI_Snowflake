@@ -179,9 +179,11 @@ class FabricOAuthClient:
             authority=authority,
         )
 
-        # Use different cache keys for different scopes
-        scope_suffix = "_storage" if scopes and "storage" in str(scopes) else ""
-        self._cache_key = f"fabric_{config.client_id}{scope_suffix}"
+        # Generate cache key based on scopes to prevent collisions
+        import hashlib
+        scopes_str = ",".join(sorted(scopes or self.DEFAULT_SCOPES))
+        scope_hash = hashlib.md5(scopes_str.encode()).hexdigest()[:8]
+        self._cache_key = f"fabric_{config.client_id}_{scope_hash}"
 
     def get_access_token(self, force_refresh: bool = False) -> str:
         """
