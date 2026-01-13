@@ -1,0 +1,29 @@
+description: Sales Representatives dataset
+tables:
+  - name: Representatives
+    description: Sales representatives information
+    columns:
+      - name: rep_id
+        dataType: Int64
+        description: Representative ID
+        isNullable: false
+      
+      - name: name
+        dataType: String
+        description: Representative name
+        isNullable: false
+      
+      - name: region
+        dataType: String
+        description: Assigned sales region
+        isNullable: true
+      
+      - name: email
+        dataType: String
+        description: Contact email address
+        isNullable: true
+      
+      - name: quota
+        dataType: Double
+        description: Sales quota
+        isNullable: true

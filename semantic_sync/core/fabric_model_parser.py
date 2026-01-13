@@ -39,6 +39,13 @@ try:
 except ImportError:
     AUTO_METADATA_AVAILABLE = False
 
+# Try to import metadata registry (manual fallback)
+try:
+    from semantic_sync.core.metadata_registry import get_metadata_registry
+    METADATA_REGISTRY_AVAILABLE = True
+except ImportError:
+    METADATA_REGISTRY_AVAILABLE = False
+
 
 class FabricModelParser:
     """Parses Fabric datasets to normalized SemanticModel format."""
@@ -127,6 +134,21 @@ class FabricModelParser:
                     logger.info(f"Loaded {len(tables)} tables from auto-metadata for '{dataset_name}'")
             except Exception as e:
                 logger.warning(f"Auto-metadata fallback failed: {e}")
+        
+        # 5. Metadata registry fallback: Use manually defined metadata
+        if not tables and METADATA_REGISTRY_AVAILABLE:
+            logger.info(f"Attempting metadata registry fallback for '{dataset_name}'")
+            try:
+                registry = get_metadata_registry()
+                if registry.has_manual_definition(dataset_name):
+                    tables = registry.get_manual_tables(dataset_name)
+                    # Also get manual description if available
+                    manual_desc = registry.get_manual_description(dataset_name)
+                    if manual_desc and not description:
+                        description = manual_desc
+                    logger.info(f"✅ Loaded {len(tables)} tables from metadata registry for '{dataset_name}'")
+            except Exception as e:
+                logger.warning(f"Metadata registry fallback failed: {e}")
 
         if not tables and not measures:
              logger.warning("No tables or measures found. Model might be empty.")
