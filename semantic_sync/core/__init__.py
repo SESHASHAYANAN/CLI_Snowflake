@@ -15,7 +15,15 @@ from semantic_sync.core.fabric_model_parser import FabricModelParser
 from semantic_sync.core.semantic_formatter import SemanticFormatter
 from semantic_sync.core.change_detector import ChangeDetector, ChangeType, Change
 from semantic_sync.core.semantic_updater import SemanticUpdater, SyncDirection, SyncMode
-from semantic_sync.core.sqlite_rollback import RollbackManager, get_rollback_manager
+from semantic_sync.core.duckdb_repository import (
+    Repository,
+    ProjectInfo,
+    RunInfo,
+    ArtifactInfo,
+    VersionMetadata,
+    SnapshotInfo,
+    get_repository,
+)
 from semantic_sync.core.fabric_snowflake_semantic_pipeline import (
     FabricToSnowflakePipeline,
     SemanticSyncConfig,
@@ -38,8 +46,14 @@ __all__ = [
     "SemanticUpdater",
     "SyncDirection",
     "SyncMode",
-    "RollbackManager",
-    "get_rollback_manager",
+    # DuckDB Repository (replaces SQLite rollback)
+    "Repository",
+    "ProjectInfo",
+    "RunInfo",
+    "ArtifactInfo",
+    "VersionMetadata",
+    "SnapshotInfo",
+    "get_repository",
     # Semantic Pipeline
     "FabricToSnowflakePipeline",
     "SemanticSyncConfig",
