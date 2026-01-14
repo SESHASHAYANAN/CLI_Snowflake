@@ -149,9 +149,10 @@ class FabricXmlaClient:
     def _get_tables_via_info_functions(self) -> list[dict[str, Any]]:
         """
         Get tables using INFO.TABLES() DAX function (available for all datasets).
+        Falls back to COLUMNSTATISTICS() if INFO.TABLES() is not supported.
         """
+        # Try INFO.TABLES() first
         try:
-            # INFO.TABLES() returns table metadata
             dax_query = "EVALUATE INFO.TABLES()"
             tables_rows = self._execute_dax_query(dax_query)
             
@@ -179,7 +180,60 @@ class FabricXmlaClient:
             return tables
             
         except Exception as e:
-            logger.error(f"Failed to retrieve tables via INFO.TABLES: {e}")
+            logger.warning(f"INFO.TABLES() not supported, trying COLUMNSTATISTICS fallback: {e}")
+        
+        # Fallback: Use COLUMNSTATISTICS() which is more universally available
+        return self._get_tables_via_columnstatistics()
+    
+    def _get_tables_via_columnstatistics(self) -> list[dict[str, Any]]:
+        """
+        Get tables using COLUMNSTATISTICS() DAX function.
+        This is a more universally supported fallback.
+        """
+        try:
+            dax_query = "EVALUATE COLUMNSTATISTICS()"
+            rows = self._execute_dax_query(dax_query)
+            
+            # Group columns by table
+            tables_dict: dict[str, list[dict]] = {}
+            for row in rows:
+                table_name = row.get("[Table Name]", row.get("Table Name", ""))
+                col_name = row.get("[Column Name]", row.get("Column Name", ""))
+                
+                if not table_name or not col_name:
+                    continue
+                
+                # Skip system tables
+                if table_name.startswith("DateTableTemplate") or table_name.startswith("LocalDateTable"):
+                    continue
+                
+                if table_name not in tables_dict:
+                    tables_dict[table_name] = []
+                
+                # COLUMNSTATISTICS doesn't give us data types, default to String
+                tables_dict[table_name].append({
+                    "name": col_name,
+                    "dataType": "String",
+                    "isHidden": False,
+                    "description": "",
+                    "isNullable": True
+                })
+            
+            # Convert to list format
+            tables = []
+            for table_name, columns in tables_dict.items():
+                tables.append({
+                    "name": table_name,
+                    "description": "",
+                    "isHidden": False,
+                    "columns": columns
+                })
+            
+            logger.info(f"Retrieved {len(tables)} tables via COLUMNSTATISTICS()")
+            return tables
+            
+        except Exception as e:
+            logger.error(f"Failed to retrieve tables via COLUMNSTATISTICS: {e}")
             return []
     
     def _get_columns_for_table(self, table_name: str) -> list[dict[str, Any]]:
